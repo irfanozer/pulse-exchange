@@ -1,0 +1,152 @@
+"""API surface and readiness tests that do not require a running database."""
+
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from typing import Any, cast
+
+import pytest
+from fastapi import HTTPException, Request
+from sqlalchemy.exc import SQLAlchemyError
+
+from pulseexchange.api import routes as routes_module
+from pulseexchange.api.routes import _is_new_event, api, normalize_symbol, ready_with_request
+from pulseexchange.commands import IdempotencyConflictError
+from pulseexchange.config import Settings
+from pulseexchange.main import create_app
+
+
+def test_openapi_exposes_command_market_and_health_routes() -> None:
+    app = create_app(Settings(processor_enabled=False))
+    paths = app.openapi()["paths"]
+
+    assert "/health/live" in paths
+    assert "/health/ready" in paths
+    assert "/api/v1/orders" in paths
+    assert "/api/v1/orders/{order_id}" in paths
+    assert "/api/v1/commands/{command_id}" in paths
+    assert "/api/v1/markets/{symbol}/book" in paths
+    assert "/api/v1/markets/{symbol}/trades" in paths
+
+
+def test_local_database_default_matches_compose_host_port() -> None:
+    assert "@localhost:5433/" in Settings().database_url
+
+
+def test_cors_origins_accept_json_or_comma_separated_environment_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PULSEEXCHANGE_CORS_ORIGINS", "http://one.test,http://two.test")
+    assert Settings(_env_file=None).cors_origins == ["http://one.test", "http://two.test"]
+
+    monkeypatch.setenv(
+        "PULSEEXCHANGE_CORS_ORIGINS", '["http://json-one.test","http://json-two.test"]'
+    )
+    assert Settings(_env_file=None).cors_origins == [
+        "http://json-one.test",
+        "http://json-two.test",
+    ]
+
+
+def test_submit_and_cancel_require_idempotency_keys() -> None:
+    schema = create_app(Settings(processor_enabled=False)).openapi()
+    post_parameters = schema["paths"]["/api/v1/orders"]["post"]["parameters"]
+    delete_parameters = schema["paths"]["/api/v1/orders/{order_id}"]["delete"]["parameters"]
+
+    assert any(
+        parameter["name"] == "Idempotency-Key" and parameter["required"]
+        for parameter in post_parameters
+    )
+    assert any(
+        parameter["name"] == "Idempotency-Key" and parameter["required"]
+        for parameter in delete_parameters
+    )
+
+
+def test_websocket_market_stream_is_registered() -> None:
+    websocket_paths = {getattr(route, "path", None) for route in api.routes}
+
+    assert "/api/v1/markets/{symbol}/stream" in websocket_paths
+
+
+def test_path_symbols_are_limited_to_documented_fictional_markets() -> None:
+    assert normalize_symbol("nova") == "NOVA"
+    assert normalize_symbol("orbit") == "ORBIT"
+    with pytest.raises(HTTPException, match="NOVA or ORBIT"):
+        normalize_symbol("ACME")
+
+
+def test_app_maps_idempotency_reuse_conflicts_to_http_409() -> None:
+    app = create_app(Settings(processor_enabled=False))
+
+    assert IdempotencyConflictError in app.exception_handlers
+
+
+def test_stream_drops_updates_already_represented_by_snapshot() -> None:
+    assert not _is_new_event({"event_id": 9}, current_event_id=9)
+    assert not _is_new_event({"event_id": 8}, current_event_id=9)
+    assert _is_new_event({"event_id": 10}, current_event_id=9)
+
+
+class _ReadySession:
+    def __init__(self, error: SQLAlchemyError | None = None) -> None:
+        self.error = error
+        self.statement: Any = None
+
+    async def execute(self, statement: Any) -> None:
+        self.statement = statement
+        if self.error is not None:
+            raise self.error
+
+
+def _readiness_request(session: _ReadySession) -> Request:
+    @asynccontextmanager
+    async def session_context() -> Any:
+        yield session
+
+    state = SimpleNamespace(
+        processor=SimpleNamespace(running=True),
+        session_factory=session_context,
+        settings=Settings(processor_enabled=True),
+    )
+    return cast(Request, SimpleNamespace(app=SimpleNamespace(state=state)))
+
+
+@pytest.mark.asyncio
+async def test_readiness_queries_an_application_table_not_only_the_connection() -> None:
+    session = _ReadySession()
+
+    response = await ready_with_request(_readiness_request(session))
+
+    assert response.status == "ok"
+    assert "market_commands" in str(session.statement)
+
+
+@pytest.mark.asyncio
+async def test_readiness_rejects_a_connected_database_with_no_schema() -> None:
+    request = _readiness_request(_ReadySession(SQLAlchemyError("schema missing")))
+
+    with pytest.raises(HTTPException) as captured:
+        await ready_with_request(request)
+
+    assert captured.value.status_code == 503
+    assert captured.value.detail == "database is not ready"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_reads_durable_event_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = object()
+
+    @asynccontextmanager
+    async def session_context() -> Any:
+        yield session
+
+    async def durable_cursor(candidate: object, symbol: str) -> int:
+        assert candidate is session
+        assert symbol == "NOVA"
+        return 27
+
+    monkeypatch.setattr(routes_module, "latest_market_event_id", durable_cursor)
+
+    assert await routes_module._read_latest_event_id(session_context, "NOVA") == 27  # type: ignore[arg-type]

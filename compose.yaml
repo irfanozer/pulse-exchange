@@ -1,0 +1,49 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pulseexchange}
+      POSTGRES_USER: ${POSTGRES_USER:-pulseexchange}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pulseexchange}
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pulseexchange} -d ${POSTGRES_DB:-pulseexchange}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - pulseexchange-postgres:/var/lib/postgresql/data
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      PULSEEXCHANGE_DATABASE_URL: ${PULSEEXCHANGE_DATABASE_URL:-postgresql+asyncpg://pulseexchange:pulseexchange@db:5432/pulseexchange}
+      PULSEEXCHANGE_PROCESSOR_ENABLED: ${PULSEEXCHANGE_PROCESSOR_ENABLED:-true}
+      PULSEEXCHANGE_PROCESSOR_POLL_INTERVAL_MS: ${PULSEEXCHANGE_PROCESSOR_POLL_INTERVAL_MS:-50}
+      PULSEEXCHANGE_WEBSOCKET_REPLAY_LIMIT: ${PULSEEXCHANGE_WEBSOCKET_REPLAY_LIMIT:-100}
+      PULSEEXCHANGE_CORS_ORIGINS: ${PULSEEXCHANGE_CORS_ORIGINS:-["http://localhost:3001","http://localhost:5173"]}
+    command: ["sh", "-c", "alembic upgrade head && uvicorn pulseexchange.main:app --host 0.0.0.0 --port 8000"]
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3001:80"
+
+volumes:
+  pulseexchange-postgres:
