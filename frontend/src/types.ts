@@ -24,6 +24,9 @@ export interface Trade {
   quantity: number;
   buy_order_id?: string;
   sell_order_id?: string;
+  maker_order_id?: string;
+  taker_order_id?: string;
+  maker_side?: OrderSide;
   created_at: string;
 }
 
@@ -40,6 +43,7 @@ export interface TradeWire {
   sell_order_id?: string;
   maker_order_id?: string;
   taker_order_id?: string;
+  maker_side?: OrderSide;
   created_at: string;
 }
 
@@ -53,6 +57,7 @@ export interface RecoveredMarketEvent {
 
 export interface MarketStreamMessage {
   type: "snapshot" | "market_update" | "heartbeat";
+  delivery_reason?: "initial" | "live_refresh" | "reconnect" | "recovery";
   symbol?: SymbolCode;
   sequence: number;
   event_id: number;
@@ -67,5 +72,84 @@ export interface MarketStreamMessage {
 
 export interface OrderReceipt {
   orderId: string | null;
+  commandId: string | null;
+  commandSequence: number | null;
   message: string;
+}
+
+export interface CommandReceipt {
+  command_id: string;
+  correlation_id: string;
+  sequence: number;
+  status: "queued" | "completed" | "rejected";
+  error_message: string | null;
+}
+
+export type ServiceStatus = "online" | "stale" | "offline";
+
+export interface DiagnosticsSummary {
+  generated_at: string;
+  services: {
+    api: { status: ServiceStatus };
+    processor: {
+      status: ServiceStatus;
+      last_heartbeat_at: string | null;
+      age_ms?: number | null;
+    };
+  };
+  queue: {
+    depth: number;
+    oldest_age_ms: number | null;
+  };
+  commands: {
+    accepted: number;
+    completed: number;
+    rejected: number;
+    latency_ms: {
+      p50: number | null;
+      p95: number | null;
+      p99: number | null;
+    };
+  };
+  market: {
+    orders: number;
+    trades: number;
+    events: number;
+    latest_sequence: number;
+    sequence_integrity: boolean;
+  };
+  streams: {
+    connected: number;
+    recovered_events: number;
+    resyncs: number;
+  };
+}
+
+export interface ClientEvidence {
+  messages: number;
+  reconnects: number;
+  recoveredEvents: number;
+  resyncs: number;
+  duplicatesIgnored: number;
+  lastEventId: number;
+}
+
+export type DemoStepStatus = "waiting" | "running" | "complete" | "failed";
+
+export interface GuidedDemoStep {
+  id: "accept" | "process" | "match" | "verify";
+  title: string;
+  detail: string;
+  status: DemoStepStatus;
+}
+
+export interface GuidedDemoResult {
+  durationMs: number;
+  requestsAccepted: number;
+  startingSequence: number;
+  endingSequence: number;
+  tradeId: string;
+  tradeSequence: number;
+  price: number;
+  quantity: number;
 }

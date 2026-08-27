@@ -36,6 +36,15 @@ async def wait_for_order_update(
     socket: ClientConnection,
     order_id: str,
 ) -> dict[str, Any]:
+    """Return an order outcome from either a direct update or durable resync.
+
+    The production-style API and processor run in separate processes. The
+    processor commits a PostgreSQL notification, and the API responds with an
+    authoritative snapshot containing recovered events. Embedded local mode
+    may still publish a direct ``market_update``; both forms prove the same
+    durable outcome.
+    """
+
     async with asyncio.timeout(15):
         while True:
             message = json.loads(await socket.recv())
@@ -45,6 +54,20 @@ async def wait_for_order_update(
                 and payload.get("order_id") == order_id
             ):
                 return message
+            if message.get("type") != "snapshot":
+                continue
+            for recovered in message.get("recovered_events") or []:
+                recovered_payload = recovered.get("payload") or {}
+                if recovered_payload.get("order_id") != order_id:
+                    continue
+                return {
+                    "type": "recovered_market_update",
+                    "event_type": recovered["event_type"],
+                    "event_id": recovered["event_id"],
+                    "payload": recovered_payload,
+                    "book": message.get("book"),
+                    "trades": message.get("trades") or [],
+                }
 
 
 async def wait_for_command(

@@ -29,6 +29,7 @@ from pulseexchange.models import (
     PersistedSide,
     TradeRecord,
 )
+from pulseexchange.notifications import PostgresMarketListener
 from pulseexchange.processor import CommandProcessor
 
 TEST_DATABASE_URL = os.getenv("PULSEEXCHANGE_TEST_DATABASE_URL")
@@ -612,5 +613,68 @@ async def test_publish_failure_after_commit_is_not_reprocessed(
             assert event_count == 2
             assert matching_event_count == 1
     finally:
+        await _reset_test_schema(engine, create=False)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_separate_event_listener_receives_processor_commit_hint() -> None:
+    """A worker commit wakes an API process through PostgreSQL LISTEN/NOTIFY."""
+
+    assert TEST_DATABASE_URL is not None
+    settings = Settings(
+        database_url=TEST_DATABASE_URL,
+        processor_enabled=False,
+        event_relay_enabled=True,
+    )
+    engine = create_engine(settings)
+    factory = create_session_factory(engine)
+    await _reset_test_schema(engine, create=True)
+    broadcaster = MarketBroadcaster()
+    listener = PostgresMarketListener(settings, broadcaster)
+    listener_task = asyncio.create_task(listener.run())
+
+    try:
+        for _ in range(100):
+            if listener.running:
+                break
+            await asyncio.sleep(0.01)
+        assert listener.running
+
+        async with broadcaster.subscribe("NOVA") as queue:
+            async with factory() as session:
+                await enqueue_submit(
+                    session,
+                    idempotency_key="cross-process-notification-0001",
+                    symbol="NOVA",
+                    side=PersistedSide.BUY,
+                    price=10_100,
+                    quantity=2,
+                )
+
+            processor = CommandProcessor(factory, settings)
+            assert await processor.process_once()
+            marker = await asyncio.wait_for(queue.get(), timeout=3)
+
+        assert marker["type"] == "live_refresh_required"
+        assert marker["symbol"] == "NOVA"
+        notified_event_id = int(marker["event_id"])
+        assert notified_event_id > 0
+
+        listener.stop()
+        await asyncio.wait_for(listener_task, timeout=3)
+        async with factory() as session:
+            snapshot = await build_stream_snapshot(
+                session,
+                "NOVA",
+                after_event_id=0,
+                replay_limit=10,
+            )
+        assert [event.event_id for event in snapshot.recovered_events] == [notified_event_id]
+    finally:
+        listener.stop()
+        if not listener_task.done():
+            listener_task.cancel()
+        await asyncio.gather(listener_task, return_exceptions=True)
         await _reset_test_schema(engine, create=False)
         await engine.dispose()

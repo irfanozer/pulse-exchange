@@ -37,6 +37,9 @@ export const normalizeTrade = (value: TradeWire | Trade): Trade => ({
   quantity: asNumber(value.quantity),
   buy_order_id: value.buy_order_id,
   sell_order_id: value.sell_order_id,
+  maker_order_id: value.maker_order_id,
+  taker_order_id: value.taker_order_id,
+  maker_side: value.maker_side,
   created_at: value.created_at,
 });
 

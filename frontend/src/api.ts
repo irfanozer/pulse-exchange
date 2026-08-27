@@ -1,4 +1,13 @@
-import type { OrderBook, OrderReceipt, OrderSide, SymbolCode, Trade, TradeWire } from "./types";
+import type {
+  CommandReceipt,
+  DiagnosticsSummary,
+  OrderBook,
+  OrderReceipt,
+  OrderSide,
+  SymbolCode,
+  Trade,
+  TradeWire,
+} from "./types";
 import { normalizeOrderBook, normalizeTrade } from "./market";
 
 const API_ROOT = "/api/v1";
@@ -34,6 +43,12 @@ export const getTrades = async (symbol: SymbolCode): Promise<Trade[]> => {
   return trades.map(normalizeTrade);
 };
 
+export const getDiagnosticsSummary = async (): Promise<DiagnosticsSummary> =>
+  requestJson<DiagnosticsSummary>("/diagnostics/summary");
+
+export const getCommand = async (commandId: string): Promise<CommandReceipt> =>
+  requestJson<CommandReceipt>(`/commands/${encodeURIComponent(commandId)}`);
+
 export const placeOrder = async (input: {
   symbol: SymbolCode;
   side: OrderSide;
@@ -52,8 +67,12 @@ export const placeOrder = async (input: {
     ? (response.order as Record<string, unknown>)
     : response;
   const orderId = String(nested.id ?? nested.order_id ?? response.order_id ?? "") || null;
+  const commandId = String(response.command_id ?? "") || null;
+  const commandSequence = Number(response.sequence);
   return {
     orderId,
+    commandId,
+    commandSequence: Number.isSafeInteger(commandSequence) ? commandSequence : null,
     message: orderId ? `Order command ${orderId.slice(0, 8)} queued` : "Order command queued",
   };
 };

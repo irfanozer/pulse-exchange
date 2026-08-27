@@ -90,6 +90,9 @@ class MarketCommand(Base):
     command_id: Mapped[str] = mapped_column(
         String(36), default=lambda: str(uuid.uuid4()), unique=True, nullable=False
     )
+    correlation_id: Mapped[str] = mapped_column(
+        String(64), default=lambda: str(uuid.uuid4()), nullable=False
+    )
     idempotency_key: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
     command_type: Mapped[CommandType] = mapped_column(
         enum_column(CommandType, "command_type"), nullable=False
@@ -107,6 +110,9 @@ class MarketCommand(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    processing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -205,3 +211,16 @@ class MarketEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class RuntimeHeartbeat(Base):
+    """Last-seen evidence for an independently running service instance."""
+
+    __tablename__ = "runtime_heartbeats"
+    __table_args__ = (Index("ix_runtime_heartbeats_service_seen", "service_name", "last_seen_at"),)
+
+    service_name: Mapped[str] = mapped_column(String(50), primary_key=True)
+    instance_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(json_type, nullable=False, default=dict)

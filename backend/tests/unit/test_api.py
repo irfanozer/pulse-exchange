@@ -5,14 +5,31 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from fastapi import HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
 from pulseexchange.api import routes as routes_module
-from pulseexchange.api.routes import _is_new_event, api, normalize_symbol, ready_with_request
+from pulseexchange.api.routes import (
+    _is_new_event,
+    api,
+    market_stream,
+    normalize_symbol,
+    ready_with_request,
+)
+from pulseexchange.broadcast import MarketBroadcaster
 from pulseexchange.commands import IdempotencyConflictError
 from pulseexchange.config import Settings
 from pulseexchange.main import create_app
+from pulseexchange.notifications import asyncpg_dsn
+from pulseexchange.observability import (
+    CorrelationMiddleware,
+    HttpMetrics,
+    SecurityHeadersMiddleware,
+    StreamStats,
+    correlation_id_from_header,
+)
+from pulseexchange.safety import DemoSafetyMiddleware, MutationRateLimiter, _client_key
 
 
 def test_openapi_exposes_command_market_and_health_routes() -> None:
@@ -26,6 +43,7 @@ def test_openapi_exposes_command_market_and_health_routes() -> None:
     assert "/api/v1/commands/{command_id}" in paths
     assert "/api/v1/markets/{symbol}/book" in paths
     assert "/api/v1/markets/{symbol}/trades" in paths
+    assert "/api/v1/diagnostics/summary" in paths
 
 
 def test_local_database_default_matches_compose_host_port() -> None:
@@ -97,6 +115,9 @@ class _ReadySession:
         if self.error is not None:
             raise self.error
 
+    async def scalar(self, _statement: Any) -> None:
+        return None
+
 
 def _readiness_request(session: _ReadySession) -> Request:
     @asynccontextmanager
@@ -150,3 +171,144 @@ async def test_heartbeat_reads_durable_event_cursor(
     monkeypatch.setattr(routes_module, "latest_market_event_id", durable_cursor)
 
     assert await routes_module._read_latest_event_id(session_context, "NOVA") == 27  # type: ignore[arg-type]
+
+
+def test_asyncpg_dsn_removes_sqlalchemy_driver_name() -> None:
+    dsn = asyncpg_dsn("postgresql+asyncpg://user:secret@db:5432/pulse")
+
+    assert dsn == "postgresql://user:secret@db:5432/pulse"
+
+
+def test_correlation_id_accepts_safe_values_and_replaces_unsafe_values() -> None:
+    assert correlation_id_from_header("request_abc-123") == "request_abc-123"
+    replacement = correlation_id_from_header("unsafe value with spaces")
+    assert replacement != "unsafe value with spaces"
+    assert len(replacement) == 36
+
+
+@pytest.mark.asyncio
+async def test_mutation_rate_limiter_returns_retry_after() -> None:
+    limiter = MutationRateLimiter(limit=1, window_seconds=60)
+
+    assert await limiter.allow("client") == (True, 0)
+    allowed, retry_after = await limiter.allow("client")
+    assert not allowed
+    assert retry_after > 0
+
+
+@pytest.mark.asyncio
+async def test_mutation_rate_limiter_bounds_unknown_client_storage() -> None:
+    limiter = MutationRateLimiter(limit=1, window_seconds=60, max_client_keys=1)
+
+    assert await limiter.allow("known-client") == (True, 0)
+    assert await limiter.allow("first-overflow-client") == (True, 0)
+    allowed, retry_after = await limiter.allow("second-overflow-client")
+
+    assert not allowed
+    assert retry_after > 0
+    assert set(limiter._requests) == {"known-client", "__overflow__"}
+
+
+def test_forwarded_client_identity_requires_explicit_proxy_trust() -> None:
+    request = Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/",
+            "raw_path": b"/",
+            "query_string": b"",
+            "headers": [(b"x-forwarded-for", b"198.51.100.10")],
+            "client": ("203.0.113.20", 1234),
+            "server": ("testserver", 80),
+        }
+    )
+
+    assert _client_key(request, trust_proxy_headers=False) == "203.0.113.20"
+    assert _client_key(request, trust_proxy_headers=True) == "198.51.100.10"
+
+
+def test_safety_middleware_replays_bounded_streamed_body_and_rejects_oversize() -> None:
+    app = FastAPI()
+    app.add_middleware(
+        DemoSafetyMiddleware,
+        settings=Settings(
+            processor_enabled=False,
+            max_request_body_bytes=512,
+            mutation_rate_limit=10,
+        ),
+    )
+
+    @app.post("/api/v1/echo")
+    async def echo(request: Request) -> dict[str, str]:
+        return {"body": (await request.body()).decode()}
+
+    client = TestClient(app)
+    accepted = client.post(
+        "/api/v1/echo",
+        content=iter([b'{"message":', b'"safe"}']),
+        headers={"Content-Type": "application/json"},
+    )
+    rejected = client.post(
+        "/api/v1/echo",
+        content=iter([b'{"message":"', b"x" * 520, b'"}']),
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert accepted.status_code == 200
+    assert accepted.json() == {"body": '{"message":"safe"}'}
+    assert rejected.status_code == 413
+    assert rejected.json() == {"detail": "request body exceeds the public demo limit"}
+
+
+@pytest.mark.asyncio
+async def test_websocket_capacity_closes_with_try_again_later() -> None:
+    broadcaster = MarketBroadcaster(max_connections=1)
+    settings = Settings(processor_enabled=False)
+    state = SimpleNamespace(
+        broadcaster=broadcaster,
+        settings=settings,
+        stream_stats=StreamStats(),
+        session_factory=None,
+    )
+
+    class _WebSocket:
+        def __init__(self) -> None:
+            self.app = SimpleNamespace(state=state)
+            self.accepted = False
+            self.closed: tuple[int, str] | None = None
+
+        async def accept(self) -> None:
+            self.accepted = True
+
+        async def close(self, code: int, reason: str) -> None:
+            self.closed = (code, reason)
+
+    websocket = _WebSocket()
+    async with broadcaster.subscribe("ORBIT"):
+        await market_stream(cast(Any, websocket), "NOVA")
+
+    assert websocket.accepted
+    assert websocket.closed == (1013, "live stream connection limit reached")
+    assert state.stream_stats.snapshot().connected == 0
+
+
+def test_http_correlation_metrics_and_security_headers() -> None:
+    app = FastAPI()
+    metrics = HttpMetrics()
+    app.add_middleware(CorrelationMiddleware, metrics=metrics)
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    @app.get("/probe")
+    async def probe(request: Request) -> dict[str, str]:
+        return {"correlation_id": request.state.correlation_id}
+
+    response = TestClient(app).get("/probe", headers={"X-Correlation-ID": "trace-123"})
+
+    assert response.status_code == 200
+    assert response.json() == {"correlation_id": "trace-123"}
+    assert response.headers["X-Correlation-ID"] == "trace-123"
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert metrics.snapshot().total == 1

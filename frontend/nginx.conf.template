@@ -1,8 +1,28 @@
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    '' close;
+}
+
+# The burst admits the bounded local evidence scenario; the sustained edge
+# rate and backend minute window still cap anonymous demo traffic.
+limit_req_zone $binary_remote_addr zone=order_writes:10m rate=10r/s;
+limit_conn_zone $binary_remote_addr zone=client_connections:10m;
+
 server {
     listen 80;
     server_name _;
     root /usr/share/nginx/html;
     index index.html;
+    client_max_body_size 16k;
+    limit_conn client_connections 20;
+    limit_conn_status 429;
+    limit_req_status 429;
+
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ws: wss:; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
 
     location = /healthz {
         access_log off;
@@ -10,16 +30,46 @@ server {
         return 200 "ok\n";
     }
 
+    location ~ ^/api/v1/orders(?:/|$) {
+        limit_req zone=order_writes burst=100 nodelay;
+        proxy_pass ${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+    }
+
+    location ~ ^/(?:metrics$|health/) {
+        proxy_pass ${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+    }
+
     location /api/ {
         proxy_pass ${API_UPSTREAM};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
+        proxy_set_header Connection $connection_upgrade;
+        proxy_buffering off;
         proxy_read_timeout 70s;
+        proxy_send_timeout 70s;
     }
 
     location / {

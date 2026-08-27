@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+import uuid
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
+import structlog
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -41,6 +44,8 @@ from pulseexchange.models import (
     PersistedSide,
     TradeRecord,
 )
+from pulseexchange.notifications import notify_market_event
+from pulseexchange.runtime import PROCESSOR_SERVICE, remove_heartbeat, write_heartbeat
 from pulseexchange.schemas import BookResponse, PriceLevelResponse, StreamUpdate, TradeResponse
 
 logger = logging.getLogger(__name__)
@@ -107,14 +112,23 @@ class CommandProcessor:
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
-        broadcaster: MarketBroadcaster,
-        settings: Settings,
+        broadcaster: MarketBroadcaster | Settings | None = None,
+        settings: Settings | None = None,
     ) -> None:
+        # Accept the original (factory, broadcaster, settings) form while the
+        # independent worker uses (factory, settings).
+        if isinstance(broadcaster, Settings):
+            settings = broadcaster
+            broadcaster = None
+        if settings is None:
+            raise TypeError("CommandProcessor requires Settings")
         self._session_factory = session_factory
         self._broadcaster = broadcaster
         self._settings = settings
         self._stop = asyncio.Event()
         self._running = False
+        self._instance_id = str(uuid.uuid4())
+        self._started_at = datetime.now(UTC)
 
     @property
     def running(self) -> bool:
@@ -126,9 +140,19 @@ class CommandProcessor:
     async def run(self) -> None:
         self._running = True
         logger.info("ordered command processor started")
+        next_heartbeat = 0.0
         try:
             while not self._stop.is_set():
                 try:
+                    now = time.monotonic()
+                    if now >= next_heartbeat:
+                        await write_heartbeat(
+                            self._session_factory,
+                            service_name=PROCESSOR_SERVICE,
+                            instance_id=self._instance_id,
+                            started_at=self._started_at,
+                        )
+                        next_heartbeat = now + self._settings.processor_heartbeat_interval_seconds
                     processed = await self.process_once()
                 except asyncio.CancelledError:
                     raise
@@ -143,6 +167,14 @@ class CommandProcessor:
                     await self._wait(self._settings.processor_poll_interval_ms / 1_000)
         finally:
             self._running = False
+            try:
+                await remove_heartbeat(
+                    self._session_factory,
+                    service_name=PROCESSOR_SERVICE,
+                    instance_id=self._instance_id,
+                )
+            except Exception:
+                logger.exception("failed to remove processor heartbeat")
             logger.info("ordered command processor stopped")
 
     async def _wait(self, seconds: float) -> None:
@@ -153,6 +185,8 @@ class CommandProcessor:
         """Process one command, returning false when no work was claimed."""
 
         update: dict[str, Any] | None = None
+        started = time.perf_counter()
+        processed_command: MarketCommand | None = None
         async with self._session_factory() as session, session.begin():
             if not await self._acquire_single_writer_lock(session):
                 return False
@@ -166,6 +200,8 @@ class CommandProcessor:
             )
             if command is None:
                 return False
+            processed_command = command
+            command.processing_started_at = datetime.now(UTC)
 
             try:
                 update = await self._apply_command(session, command)
@@ -173,8 +209,18 @@ class CommandProcessor:
                 update = await self._reject_command(session, command, error)
 
         # Never publish before the database transaction is known to have committed.
-        if update is not None:
+        if update is not None and self._broadcaster is not None:
             await self._broadcaster.publish(update["symbol"], update)
+        if processed_command is not None:
+            structlog.get_logger("pulseexchange.processor").info(
+                "command_processed",
+                correlation_id=processed_command.correlation_id,
+                command_id=processed_command.command_id,
+                sequence=processed_command.sequence,
+                symbol=processed_command.symbol,
+                status=processed_command.status.value,
+                duration_ms=round((time.perf_counter() - started) * 1_000, 3),
+            )
         return True
 
     async def _acquire_single_writer_lock(self, session: AsyncSession) -> bool:
@@ -270,6 +316,7 @@ class CommandProcessor:
 
         event_payload = {
             "command_id": command.command_id,
+            "correlation_id": command.correlation_id,
             "order_id": command.payload["order_id"],
             "orders": [_order_payload(order) for order in changed_orders],
             "trades": [_trade_payload(trade) for trade in trades],
@@ -284,6 +331,7 @@ class CommandProcessor:
         command.status = CommandStatus.COMPLETED
         command.completed_at = datetime.now(UTC)
         await session.flush()
+        await notify_market_event(session, symbol=command.symbol, event_id=event.event_id)
 
         command.result = {
             "event_id": event.event_id,
@@ -333,6 +381,7 @@ class CommandProcessor:
         command.completed_at = datetime.now(UTC)
         payload = {
             "command_id": command.command_id,
+            "correlation_id": command.correlation_id,
             "order_id": command.payload.get("order_id"),
             "error_code": command.error_code,
             "error_message": command.error_message,
@@ -345,6 +394,7 @@ class CommandProcessor:
         )
         session.add(event)
         await session.flush()
+        await notify_market_event(session, symbol=command.symbol, event_id=event.event_id)
         command.result = {"event_id": event.event_id}
 
         engine = await self._restore_engine(session, command.symbol)

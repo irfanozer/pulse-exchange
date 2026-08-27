@@ -1,16 +1,32 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { cancelOrder, getBook, getTrades, marketSocketUrl, placeOrder } from "./api";
+import {
+  cancelOrder,
+  getBook,
+  getCommand,
+  getDiagnosticsSummary,
+  getTrades,
+  marketSocketUrl,
+  placeOrder,
+} from "./api";
+import { DiagnosticsPanel } from "./components/DiagnosticsPanel";
+import { GuidedDemo } from "./components/GuidedDemo";
 import { OrderBookPanel } from "./components/OrderBookPanel";
 import { TradeTape } from "./components/TradeTape";
+import { createGuidedDemoSteps, findNewTrade, updateDemoStep } from "./demo";
 import {
   mergeTrades,
   normalizeOrderBook,
+  normalizeTrade,
   shouldApplyBookSnapshot,
   shouldApplyMarketUpdate,
   unseenRecoveredEvents,
 } from "./market";
 import type {
+  ClientEvidence,
   ConnectionState,
+  DiagnosticsSummary,
+  GuidedDemoResult,
+  GuidedDemoStep,
   MarketStreamMessage,
   OrderBook,
   OrderReceipt,
@@ -23,6 +39,30 @@ const SYMBOLS: SymbolCode[] = ["NOVA", "ORBIT"];
 const BASE_TICK: Record<SymbolCode, number> = { NOVA: 102, ORBIT: 48 };
 
 const wait = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const pollUntil = async <T,>(
+  read: () => Promise<T>,
+  ready: (value: T) => boolean,
+  timeoutMilliseconds = 8_000,
+): Promise<T> => {
+  const deadline = Date.now() + timeoutMilliseconds;
+  let value = await read();
+  while (!ready(value) && Date.now() < deadline) {
+    await wait(180);
+    value = await read();
+  }
+  if (!ready(value)) throw new Error("The backend did not confirm the guided run before the timeout.");
+  return value;
+};
+
+const initialClientEvidence = (): ClientEvidence => ({
+  messages: 0,
+  reconnects: 0,
+  recoveredEvents: 0,
+  resyncs: 0,
+  duplicatesIgnored: 0,
+  lastEventId: 0,
+});
 
 const statusCopy: Record<ConnectionState, string> = {
   connecting: "Connecting",
@@ -45,6 +85,10 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [lastOrder, setLastOrder] = useState<OrderReceipt | null>(null);
   const [pendingCancelOrderId, setPendingCancelOrderId] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsSummary | null>(null);
+  const [clientEvidence, setClientEvidence] = useState<ClientEvidence>(initialClientEvidence);
+  const [demoSteps, setDemoSteps] = useState<GuidedDemoStep[]>(createGuidedDemoSteps);
+  const [demoResult, setDemoResult] = useState<GuidedDemoResult | null>(null);
   const reconnectCount = useRef(0);
   const activeSymbolRef = useRef<SymbolCode>(symbol);
   const lastEventSequenceRef = useRef(-1);
@@ -52,6 +96,7 @@ function App() {
   const lastOrderIdRef = useRef<string | null>(null);
   const pendingCancelOrderIdRef = useRef<string | null>(null);
   const lastReceivedEventIdRef = useRef(0);
+  const streamTradeIdsRef = useRef<Set<string>>(new Set());
 
   const applyFreshBook = useCallback((nextBook: OrderBook, selected: SymbolCode): boolean => {
     if (activeSymbolRef.current !== selected) return false;
@@ -77,6 +122,25 @@ function App() {
 
   useEffect(() => {
     let active = true;
+    const refreshDiagnostics = async () => {
+      try {
+        const summary = await getDiagnosticsSummary();
+        if (active) setDiagnostics(summary);
+      } catch {
+        if (active) setDiagnostics(null);
+      }
+    };
+
+    refreshDiagnostics();
+    const timer = window.setInterval(refreshDiagnostics, 5_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
     let socket: WebSocket | null = null;
     let retryTimer: number | undefined;
 
@@ -84,12 +148,16 @@ function App() {
     lastEventSequenceRef.current = -1;
     lastBookSequenceRef.current = -1;
     lastReceivedEventIdRef.current = 0;
+    streamTradeIdsRef.current = new Set();
     setBook(null);
     setTrades([]);
     setSequence(0);
     setConnection("connecting");
     setError(null);
     setLastOrder(null);
+    setClientEvidence(initialClientEvidence());
+    setDemoSteps(createGuidedDemoSteps());
+    setDemoResult(null);
     lastOrderIdRef.current = null;
     pendingCancelOrderIdRef.current = null;
     setPendingCancelOrderId(null);
@@ -165,6 +233,7 @@ function App() {
         if (!active || activeSymbolRef.current !== symbol) return;
         try {
           const message = JSON.parse(event.data) as MarketStreamMessage;
+          setClientEvidence((current) => ({ ...current, messages: current.messages + 1 }));
           if ((message.symbol ?? message.book?.symbol) !== symbol) return;
           const incomingSequence = Number(message.sequence ?? message.book?.sequence ?? 0);
           const incomingEventId = Number(message.event_id ?? message.book?.event_id ?? 0);
@@ -182,6 +251,7 @@ function App() {
           }
 
           if (message.type === "snapshot" && message.recovered_events?.length) {
+            const isRecovery = message.delivery_reason !== "live_refresh";
             const recoveredEvents = unseenRecoveredEvents(
               message.recovered_events,
               lastReceivedEventIdRef.current,
@@ -191,10 +261,16 @@ function App() {
                 recoveredEvent.event_type,
                 recoveredEvent.payload,
                 recoveredEvent.sequence,
-                true,
+                isRecovery,
               );
               lastReceivedEventIdRef.current = recoveredEvent.event_id;
             }
+            setClientEvidence((current) => ({
+              ...current,
+              recoveredEvents: current.recoveredEvents
+                + (isRecovery ? recoveredEvents.length : 0),
+              lastEventId: Math.max(current.lastEventId, lastReceivedEventIdRef.current),
+            }));
           }
 
           if (message.type === "snapshot" && message.replay_truncated) {
@@ -203,6 +279,7 @@ function App() {
             setNotice(
               "Connection restored from the current snapshot. Some older outcomes were outside the replay window.",
             );
+            setClientEvidence((current) => ({ ...current, resyncs: current.resyncs + 1 }));
           }
 
           if (message.type === "market_update") {
@@ -210,8 +287,20 @@ function App() {
               Number.isFinite(incomingEventId)
               && incomingEventId > 0
               && incomingEventId <= lastReceivedEventIdRef.current
-            ) return;
-            if (!shouldApplyMarketUpdate(incomingSequence, lastEventSequenceRef.current)) return;
+            ) {
+              setClientEvidence((current) => ({
+                ...current,
+                duplicatesIgnored: current.duplicatesIgnored + 1,
+              }));
+              return;
+            }
+            if (!shouldApplyMarketUpdate(incomingSequence, lastEventSequenceRef.current)) {
+              setClientEvidence((current) => ({
+                ...current,
+                duplicatesIgnored: current.duplicatesIgnored + 1,
+              }));
+              return;
+            }
             lastEventSequenceRef.current = incomingSequence;
           } else if (incomingSequence < lastEventSequenceRef.current) {
             return;
@@ -224,6 +313,7 @@ function App() {
             applyFreshBook(normalizeOrderBook(message.book, symbol), symbol);
           }
           if (message.trades?.length) {
+            message.trades.forEach((trade) => streamTradeIdsRef.current.add(normalizeTrade(trade).id));
             setTrades((current) => mergeTrades(current, message.trades ?? []));
           }
 
@@ -236,6 +326,10 @@ function App() {
               lastReceivedEventIdRef.current,
               incomingEventId,
             );
+            setClientEvidence((current) => ({
+              ...current,
+              lastEventId: Math.max(current.lastEventId, incomingEventId),
+            }));
           }
         } catch {
           setError("A live update arrived in an unexpected format.");
@@ -246,6 +340,7 @@ function App() {
       socket.onclose = () => {
         if (!active) return;
         reconnectCount.current += 1;
+        setClientEvidence((current) => ({ ...current, reconnects: current.reconnects + 1 }));
         setConnection(reconnectCount.current > 4 ? "offline" : "reconnecting");
         const delay = Math.min(5000, 700 * 2 ** reconnectCount.current);
         retryTimer = window.setTimeout(() => connect(true), delay);
@@ -344,6 +439,146 @@ function App() {
     }
   };
 
+  const runGuidedDemo = async () => {
+    const selected = symbol;
+    const startedAt = performance.now();
+    let activeStep: GuidedDemoStep["id"] = "accept";
+    let acceptedRequests = 0;
+
+    setBusy("guided");
+    setError(null);
+    setNotice(null);
+    setDemoResult(null);
+    setDemoSteps(updateDemoStep(createGuidedDemoSteps(), "accept", "running"));
+
+    try {
+      const [startingBook, startingTrades] = await Promise.all([
+        getBook(selected),
+        getTrades(selected),
+      ]);
+      const startingSequence = startingBook.sequence;
+      const previousTradeIds = new Set(startingTrades.map((trade) => trade.id));
+      const base = BASE_TICK[selected];
+      const bestBid = startingBook.bids[0]?.price ?? base - 2;
+      const bestAsk = startingBook.asks[0]?.price ?? base + 2;
+      const restingBid = Math.max(1, Math.min(base - 1, bestAsk - 1));
+      const restingAsk = Math.max(base + 1, bestBid + 1, restingBid + 1);
+      const liquidityOrders = [
+        { symbol: selected, side: "buy" as const, price: Math.max(1, restingBid - 1), quantity: 12 },
+        { symbol: selected, side: "buy" as const, price: restingBid, quantity: 7 },
+        { symbol: selected, side: "sell" as const, price: restingAsk, quantity: 9 },
+        { symbol: selected, side: "sell" as const, price: restingAsk + 1, quantity: 15 },
+      ];
+
+      const liquidityCommandIds: string[] = [];
+      for (const order of liquidityOrders) {
+        const receipt = await placeOrder(order);
+        if (!receipt.commandId) {
+          throw new Error("The API accepted liquidity without returning a command receipt.");
+        }
+        liquidityCommandIds.push(receipt.commandId);
+        acceptedRequests += 1;
+      }
+      setDemoSteps((current) => updateDemoStep(
+        updateDemoStep(current, "accept", "complete", "Four HTTP 202 responses accepted real commands."),
+        "process",
+        "running",
+      ));
+
+      activeStep = "process";
+      const completedLiquidity = await pollUntil(
+        () => Promise.all(
+          liquidityCommandIds.map((commandId) => getCommand(commandId)),
+        ),
+        (commands) => commands.every((command) => command.status !== "queued"),
+      );
+      const rejectedLiquidity = completedLiquidity.find((command) => command.status !== "completed");
+      if (rejectedLiquidity) {
+        throw new Error(
+          rejectedLiquidity.error_message
+          ?? `Liquidity command ${rejectedLiquidity.command_id.slice(0, 8)} was rejected.`,
+        );
+      }
+      const stagedBook = await getBook(selected);
+      if (activeSymbolRef.current !== selected) throw new Error("The selected market changed during the run.");
+      applyFreshBook(stagedBook, selected);
+      setDemoSteps((current) => updateDemoStep(
+        updateDemoStep(
+          current,
+          "process",
+          "complete",
+          `All four command receipts completed; PostgreSQL is at sequence ${stagedBook.sequence}.`,
+        ),
+        "match",
+        "running",
+      ));
+
+      activeStep = "match";
+      const targetAsk = stagedBook.asks[0];
+      if (!targetAsk) throw new Error("The engine did not expose a resting sell order to match.");
+      const matchQuantity = Math.max(1, Math.min(5, targetAsk.quantity));
+      const matchReceipt = await placeOrder({
+        symbol: selected,
+        side: "buy",
+        price: targetAsk.price,
+        quantity: matchQuantity,
+      });
+      if (!matchReceipt.orderId) throw new Error("The API accepted the match without returning an order ID.");
+      acceptedRequests += 1;
+      setDemoSteps((current) => updateDemoStep(
+        updateDemoStep(
+          current,
+          "match",
+          "complete",
+          `Buy ${matchQuantity} @ ${targetAsk.price} crossed the best resting sell.`,
+        ),
+        "verify",
+        "running",
+      ));
+
+      activeStep = "verify";
+      const verifiedTrades = await pollUntil(
+        () => getTrades(selected),
+        (candidate) => findNewTrade(candidate, previousTradeIds, matchReceipt.orderId) !== null,
+      );
+      const verifiedTrade = findNewTrade(verifiedTrades, previousTradeIds, matchReceipt.orderId);
+      if (!verifiedTrade) throw new Error("The matching order completed without a readable trade record.");
+      await pollUntil(
+        async () => streamTradeIdsRef.current.has(verifiedTrade.id),
+        (observed) => observed,
+        4_000,
+      );
+      const endingBook = await getBook(selected);
+      applyFreshBook(endingBook, selected);
+      setTrades((current) => mergeTrades(current, verifiedTrades));
+      setDemoSteps((current) => updateDemoStep(
+        current,
+        "verify",
+        "complete",
+        `Trade ${verifiedTrade.id} appeared in REST results and the WebSocket stream.`,
+      ));
+      setDemoResult({
+        durationMs: performance.now() - startedAt,
+        requestsAccepted: acceptedRequests,
+        startingSequence,
+        endingSequence: endingBook.sequence,
+        tradeId: verifiedTrade.id,
+        tradeSequence: verifiedTrade.sequence,
+        price: verifiedTrade.price,
+        quantity: verifiedTrade.quantity,
+      });
+      lastOrderIdRef.current = null;
+      setLastOrder(null);
+      setNotice(`Guided proof complete: trade ${verifiedTrade.id} verified from backend state.`);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "The guided proof could not finish.";
+      setDemoSteps((current) => updateDemoStep(current, activeStep, "failed", message));
+      setError(message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const handleCancel = async () => {
     if (!lastOrder?.orderId) return;
     const orderId = lastOrder.orderId;
@@ -424,6 +659,14 @@ function App() {
           </div>
         </section>
 
+        <GuidedDemo
+          steps={demoSteps}
+          result={demoResult}
+          running={busy === "guided"}
+          canRun={connection === "live" && !writesPending}
+          onRun={runGuidedDemo}
+        />
+
         <section className="request-path" aria-labelledby="request-path-heading">
           <div className="path-intro">
             <p className="eyebrow">The real request path</p>
@@ -434,9 +677,19 @@ function App() {
             <li><span>02</span><strong>FastAPI</strong><small>Validate + idempotency</small></li>
             <li><span>03</span><strong>PostgreSQL</strong><small>Persist + sequence</small></li>
             <li><span>04</span><strong>Engine</strong><small>Price-time priority</small></li>
-            <li><span>05</span><strong>This screen</strong><small>WebSocket market_update</small></li>
+            <li><span>05</span><strong>This screen</strong><small>WebSocket committed snapshot</small></li>
           </ol>
         </section>
+
+        <div className="diagnostics-wrap">
+          <DiagnosticsPanel
+            summary={diagnostics}
+            connection={connection}
+            sequence={sequence}
+            tradeCount={trades.length}
+            client={clientEvidence}
+          />
+        </div>
 
         {(error || notice) && (
           <div className={`message-bar ${error ? "message-bar--error" : "message-bar--success"}`} role="status">
@@ -498,14 +751,6 @@ function App() {
               </button>
             </section>
 
-            <section className="evidence-panel">
-              <p className="eyebrow">What proves it is live</p>
-              <ul>
-                <li><span className={`evidence-dot evidence-dot--${connection}`} /><div><strong>{statusCopy[connection]}</strong><small>/api/v1/markets/{symbol}/stream</small></div></li>
-                <li><span>#{sequence.toLocaleString()}</span><div><strong>Latest engine sequence</strong><small>Monotonic ordering from the backend</small></div></li>
-                <li><span>{trades.length}</span><div><strong>Independent trade records</strong><small>Fetched over REST, updated by WebSocket</small></div></li>
-              </ul>
-            </section>
           </aside>
         </div>
       </main>

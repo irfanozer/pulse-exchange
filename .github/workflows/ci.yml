@@ -72,5 +72,33 @@ jobs:
     needs: [backend, frontend]
     steps:
       - uses: actions/checkout@v4
-      - run: docker build --tag pulseexchange-backend ./backend
-      - run: docker build --tag pulseexchange-frontend ./frontend
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install "httpx>=0.28,<1" "websockets>=15,<16"
+      - name: Build and start the separated API and processor stack
+        run: docker compose up --build --detach
+      - name: Wait for the browser entry point
+        run: |
+          for attempt in {1..60}; do
+            if curl --fail --silent http://localhost:3001/healthz >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose ps
+          exit 1
+      - name: Verify matching, streaming, and reconnect recovery
+        run: python scripts/smoke.py
+      - name: Verify a measured concurrent command run
+        run: >-
+          python scripts/load_evidence.py
+          --pairs 5
+          --concurrency 5
+          --output-prefix /tmp/pulseexchange-load-evidence
+      - name: Show service logs after a failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop the test stack
+        if: always()
+        run: docker compose down

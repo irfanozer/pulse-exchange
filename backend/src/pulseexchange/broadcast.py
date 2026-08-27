@@ -12,23 +12,47 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
+from pulseexchange.observability import StreamStats
+
+
+class StreamCapacityError(Exception):
+    """The public demo has reached its configured live-client limit."""
+
 
 class MarketBroadcaster:
-    def __init__(self, queue_size: int = 128) -> None:
+    def __init__(
+        self,
+        queue_size: int = 128,
+        *,
+        max_connections: int = 10_000,
+        stats: StreamStats | None = None,
+    ) -> None:
         self._queue_size = queue_size
+        self._max_connections = max_connections
+        self._stats = stats
         self._subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = defaultdict(set)
         self._guard = asyncio.Lock()
+
+    @property
+    def connection_count(self) -> int:
+        return sum(len(queues) for queues in self._subscribers.values())
 
     @asynccontextmanager
     async def subscribe(self, symbol: str) -> AsyncIterator[asyncio.Queue[dict[str, Any]]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=self._queue_size)
         async with self._guard:
+            if self.connection_count >= self._max_connections:
+                raise StreamCapacityError("live stream connection limit reached")
             self._subscribers[symbol].add(queue)
+            if self._stats is not None:
+                self._stats.connected_client()
         try:
             yield queue
         finally:
             async with self._guard:
                 self._subscribers[symbol].discard(queue)
+                if self._stats is not None:
+                    self._stats.disconnected_client()
                 if not self._subscribers[symbol]:
                     self._subscribers.pop(symbol, None)
 

@@ -55,6 +55,7 @@ class QueueCancelRequest(ApiModel):
 
 class CommandResponse(ApiModel):
     command_id: str
+    correlation_id: str
     sequence: int
     command_type: CommandType
     status: CommandStatus
@@ -75,6 +76,7 @@ class QueuedCommandResponse(CommandResponse):
         return cls.model_validate(
             {
                 "command_id": command.command_id,
+                "correlation_id": command.correlation_id,
                 "sequence": command.sequence,
                 "command_type": command.command_type,
                 "status": command.status,
@@ -145,6 +147,7 @@ class RecoveredMarketEvent(ApiModel):
 
 class StreamSnapshot(ApiModel):
     type: Literal["snapshot"] = "snapshot"
+    delivery_reason: Literal["initial", "live_refresh", "reconnect", "recovery"] = "initial"
     symbol: str
     sequence: int
     event_id: int
@@ -177,3 +180,56 @@ class HealthResponse(ApiModel):
     status: Literal["ok", "not_ready"]
     service: str = "pulseexchange-api"
     processor_running: bool | None = None
+    event_relay_running: bool | None = None
+
+
+class ServiceStatus(ApiModel):
+    status: Literal["online", "stale", "offline"]
+    last_heartbeat_at: datetime | None = None
+    age_ms: float | None = None
+
+
+class ServicesDiagnostics(ApiModel):
+    api: ServiceStatus
+    processor: ServiceStatus
+
+
+class QueueDiagnostics(ApiModel):
+    depth: int
+    oldest_age_ms: float | None = None
+
+
+class LatencyPercentiles(ApiModel):
+    p50: float | None = None
+    p95: float | None = None
+    p99: float | None = None
+
+
+class CommandsDiagnostics(ApiModel):
+    accepted: int
+    completed: int
+    rejected: int
+    latency_ms: LatencyPercentiles
+
+
+class MarketDiagnostics(ApiModel):
+    orders: int
+    trades: int
+    events: int
+    latest_sequence: int
+    sequence_integrity: bool
+
+
+class StreamDiagnostics(ApiModel):
+    connected: int
+    recovered_events: int
+    resyncs: int
+
+
+class DiagnosticsSummary(ApiModel):
+    generated_at: datetime
+    services: ServicesDiagnostics
+    queue: QueueDiagnostics
+    commands: CommandsDiagnostics
+    market: MarketDiagnostics
+    streams: StreamDiagnostics

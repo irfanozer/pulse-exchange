@@ -5,9 +5,10 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from pulseexchange.models import PersistedSide
+from pulseexchange.models import CommandStatus, CommandType, MarketCommand, PersistedSide
 from pulseexchange.schemas import (
     BookResponse,
+    QueuedCommandResponse,
     RecoveredMarketEvent,
     StreamSnapshot,
     SubmitOrderRequest,
@@ -85,3 +86,25 @@ def test_reconnect_snapshot_serializes_durable_recovery_evidence() -> None:
     assert encoded["recovered_events"][0]["event_id"] == 12
     assert encoded["recovered_events"][0]["sequence"] == 15
     assert encoded["replay_truncated"] is True
+
+
+def test_queued_receipt_includes_request_correlation_id() -> None:
+    command = MarketCommand(
+        command_id="command-1",
+        correlation_id="request-123",
+        sequence=7,
+        idempotency_key="idempotency-key",
+        command_type=CommandType.SUBMIT_ORDER,
+        status=CommandStatus.QUEUED,
+        symbol="NOVA",
+        payload={"order_id": "order-1", "side": "buy", "price": 100, "quantity": 1},
+        result=None,
+        error_code=None,
+        error_message=None,
+        created_at=datetime(2026, 8, 27, tzinfo=UTC),
+        completed_at=None,
+    )
+
+    receipt = QueuedCommandResponse.from_command(command)
+
+    assert receipt.correlation_id == "request-123"

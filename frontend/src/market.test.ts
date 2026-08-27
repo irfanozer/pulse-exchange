@@ -60,7 +60,14 @@ describe("market data transformations", () => {
       price: 103,
       quantity: 4,
       created_at: "2026-08-25T18:00:00Z",
-    })).toMatchObject({ id: "42", sequence: 12, price: 103, quantity: 4 });
+    })).toMatchObject({
+      id: "42",
+      sequence: 12,
+      price: 103,
+      quantity: 4,
+      maker_order_id: "maker",
+      taker_order_id: "taker",
+    });
   });
 
   it("does not invent a spread for an empty book", () => {

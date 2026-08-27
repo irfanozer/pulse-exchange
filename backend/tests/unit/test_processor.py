@@ -2,14 +2,16 @@
 
 import pytest
 
-from pulseexchange.broadcast import MarketBroadcaster
+from pulseexchange.broadcast import MarketBroadcaster, StreamCapacityError
 from pulseexchange.commands import (
     IdempotencyConflictError,
     _persist_idempotently,
     _return_or_conflict,
 )
+from pulseexchange.diagnostics import _percentile
 from pulseexchange.engine import LimitOrder, MatchingEngine, Side
 from pulseexchange.models import CommandType, MarketCommand
+from pulseexchange.notifications import notify_market_event
 from pulseexchange.processor import _book_from_engine, _order_payload
 
 
@@ -72,6 +74,52 @@ async def test_slow_subscriber_receives_explicit_resync_marker() -> None:
         await broadcaster.publish("NOVA", {"type": "market_update", "sequence": 2})
 
         assert await queue.get() == {"type": "resync_required", "symbol": "NOVA"}
+
+
+@pytest.mark.asyncio
+async def test_broadcaster_enforces_public_connection_limit() -> None:
+    broadcaster = MarketBroadcaster(max_connections=1)
+
+    async with broadcaster.subscribe("NOVA"):
+        with pytest.raises(StreamCapacityError):
+            async with broadcaster.subscribe("ORBIT"):
+                pass
+
+
+def test_latency_percentiles_interpolate_small_samples() -> None:
+    values = [10.0, 20.0, 30.0, 40.0]
+
+    assert _percentile(values, 0.50) == 25.0
+    assert _percentile(values, 0.95) == 38.5
+
+
+@pytest.mark.asyncio
+async def test_postgres_notification_contains_only_commit_hint() -> None:
+    class _Session:
+        def __init__(self) -> None:
+            self.statement: object | None = None
+            self.parameters: object | None = None
+
+        def get_bind(self) -> object:
+            return type(
+                "Bind",
+                (),
+                {"dialect": type("Dialect", (), {"name": "postgresql"})()},
+            )()
+
+        async def execute(self, statement: object, parameters: object) -> None:
+            self.statement = statement
+            self.parameters = parameters
+
+    session = _Session()
+    await notify_market_event(  # type: ignore[arg-type]
+        session,
+        symbol="NOVA",
+        event_id=42,
+    )
+
+    assert "pg_notify" in str(session.statement)
+    assert session.parameters == {"payload": '{"symbol":"NOVA","event_id":42}'}
 
 
 def _submission(*, price: int, order_id: str = "server-generated") -> MarketCommand:
