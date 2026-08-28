@@ -35,6 +35,9 @@ param webCustomDomainName string = ''
 @description('Optional Azure managed-certificate resource ID for webCustomDomainName.')
 param webCustomDomainCertificateId string = ''
 
+@description('Optional custom hostname browsers will use. This is allowlisted before certificate binding so WebSockets work as soon as the hostname is attached.')
+param browserCustomDomainName string = ''
+
 @minValue(1)
 param webMinReplicas int = 1
 
@@ -90,11 +93,11 @@ resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2026-01-01'
 }
 
 var generatedWebOrigin = 'https://${webAppName}.${containerAppsEnvironment.properties.defaultDomain}'
-var browserOrigins = empty(webCustomDomainName) ? [
+var browserOrigins = empty(browserCustomDomainName) ? [
   generatedWebOrigin
 ] : [
   generatedWebOrigin
-  'https://${webCustomDomainName}'
+  'https://${browserCustomDomainName}'
 ]
 
 resource processorApp 'Microsoft.App/containerApps@2026-01-01' = {

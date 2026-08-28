@@ -28,3 +28,8 @@ The custom hostname and managed-certificate resource ID are parameters on
 every normal deployment and rollback. The release workflow discovers an
 existing binding before mutation and can be configured to fail closed if the
 binding disappears.
+
+The browser origin allowlist is configured separately from certificate
+discovery. This lets the API accept REST and WebSocket requests from the
+configured custom hostname as soon as Azure attaches it, including on the
+first deployment before a managed certificate exists.

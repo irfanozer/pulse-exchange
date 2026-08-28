@@ -311,6 +311,7 @@ jobs:
               frontendImage="$FRONTEND_IMAGE" \
               backendImage="$BACKEND_IMAGE" \
               databaseUrl="$DATABASE_URL" \
+              browserCustomDomainName="$CUSTOM_DOMAIN" \
               webCustomDomainName="${{ steps.custom_domain.outputs.domain_name }}" \
               webCustomDomainCertificateId="${{ steps.custom_domain.outputs.certificate_id }}" \
               webMinReplicas=1 webMaxReplicas=1 \
@@ -437,6 +438,7 @@ jobs:
               frontendImage="$PREVIOUS_FRONTEND_IMAGE" \
               backendImage="$PREVIOUS_BACKEND_IMAGE" \
               databaseUrl="$DATABASE_URL" \
+              browserCustomDomainName="$CUSTOM_DOMAIN" \
               webCustomDomainName="${{ steps.custom_domain.outputs.domain_name }}" \
               webCustomDomainCertificateId="${{ steps.custom_domain.outputs.certificate_id }}" \
               webMinReplicas=1 webMaxReplicas=1 \

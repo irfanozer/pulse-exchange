@@ -89,7 +89,7 @@ async def run() -> None:
         readiness = await client.get("/health/ready")
         readiness.raise_for_status()
 
-        async with connect(WS_URL, open_timeout=10) as socket:
+        async with connect(WS_URL, origin=BASE_URL, open_timeout=10) as socket:
             snapshot = json.loads(await asyncio.wait_for(socket.recv(), timeout=10))
             assert snapshot["type"] == "snapshot"
             assert snapshot["symbol"] == "ORBIT"
@@ -124,7 +124,11 @@ async def run() -> None:
         assert completed["status"] == "completed"
 
         recovery_url = f"{WS_URL}?after_event_id={reconnect_checkpoint}"
-        async with connect(recovery_url, open_timeout=10) as recovered_socket:
+        async with connect(
+            recovery_url,
+            origin=BASE_URL,
+            open_timeout=10,
+        ) as recovered_socket:
             recovery_snapshot = json.loads(
                 await asyncio.wait_for(recovered_socket.recv(), timeout=10)
             )
