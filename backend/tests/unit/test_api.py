@@ -219,6 +219,12 @@ def test_asyncpg_dsn_removes_sqlalchemy_driver_name() -> None:
     assert dsn == "postgresql://user:secret@db:5432/pulse"
 
 
+def test_asyncpg_dsn_translates_sqlalchemy_ssl_for_azure() -> None:
+    dsn = asyncpg_dsn("postgresql+asyncpg://user:secret@db:5432/pulse?ssl=require")
+
+    assert dsn == "postgresql://user:secret@db:5432/pulse?sslmode=require"
+
+
 def test_correlation_id_accepts_safe_values_and_replaces_unsafe_values() -> None:
     assert correlation_id_from_header("request_abc-123") == "request_abc-123"
     replacement = correlation_id_from_header("unsafe value with spaces")

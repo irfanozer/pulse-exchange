@@ -36,6 +36,11 @@ def asyncpg_dsn(database_url: str) -> str:
     """Convert SQLAlchemy's async driver URL into an asyncpg DSN."""
 
     url = make_url(database_url).set(drivername="postgresql")
+    query = dict(url.query)
+    ssl_mode = query.pop("ssl", None)
+    if ssl_mode is not None:
+        query.setdefault("sslmode", ssl_mode)
+    url = url.set(query=query)
     return url.render_as_string(hide_password=False)
 
 
