@@ -34,6 +34,12 @@ process-local; with multiple API replicas, its effective aggregate allowance
 increases. A production edge or shared rate-limit store would be required for
 a global policy.
 
+The included public Azure deployment therefore fixes both the public web app
+and API at one replica, makes the API internal, applies a second global write
+limit at the only public Nginx entry point, enforces a durable command ceiling,
+and resets/reseeds the disposable fictional market daily. Those are portfolio
+demo boundaries, not a substitute for identity or distributed abuse controls.
+
 Forwarded client-address headers are ignored by default. Compose enables them
 only because the API is bound to loopback and Nginx overwrites the forwarded
 address before proxying a request. A different runtime must leave
@@ -91,6 +97,11 @@ counts, queue pressure, and data totals. They contain no financial or personal
 data in this simulator, but they are still operational information. A real
 deployment should restrict them to an operator network or authenticated
 monitoring path.
+
+The included deployment blocks `/metrics` at the public Nginx entry point. It
+keeps the diagnostics summary public because the page uses its reduced,
+non-sensitive evidence to explain the system. A real multi-user system should
+authenticate or isolate both endpoints.
 
 Correlation IDs may appear in logs and command responses. They must never be
 used to carry secrets, email addresses, tokens, or other sensitive values.

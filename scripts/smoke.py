@@ -94,11 +94,14 @@ async def run() -> None:
             assert snapshot["type"] == "snapshot"
             assert snapshot["symbol"] == "ORBIT"
 
-            buy = await submit_order(client, side="buy", price=12_345, quantity=3)
+            # ORBIT's demo profile is centered near 48 ticks. This price rests
+            # inside its seeded spread, so running verification locally does
+            # not leave an implausible outlier in the visible trade history.
+            buy = await submit_order(client, side="buy", price=48, quantity=3)
             buy_update = await wait_for_order_update(socket, buy["order_id"])
             assert buy_update["event_type"] == "order_accepted"
 
-            sell = await submit_order(client, side="sell", price=12_345, quantity=3)
+            sell = await submit_order(client, side="sell", price=48, quantity=3)
             sell_update = await wait_for_order_update(socket, sell["order_id"])
             assert sell_update["event_type"] == "order_accepted"
             assert sell_update["trades"], (
@@ -169,7 +172,7 @@ async def run() -> None:
         assert matched_trade is not None, (
             "the committed trade was not available over REST"
         )
-        assert matched_trade["price"] == 12_345
+        assert matched_trade["price"] == 48
         assert matched_trade["quantity"] == 3
 
         for order_id in (buy["order_id"], sell["order_id"]):
@@ -180,7 +183,7 @@ async def run() -> None:
     print(
         "PASS: browser proxy -> FastAPI -> PostgreSQL -> matching engine -> "
         "WebSocket/REST, including durable reconnect replay "
-        "(ORBIT trade 3 @ 123.45)"
+        "(ORBIT trade 3 @ 48 ticks)"
     )
 
 

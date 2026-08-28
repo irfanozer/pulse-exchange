@@ -4,12 +4,12 @@
 
 1. Start the complete stack with `docker compose up --build`.
 2. Open http://localhost:3001 in a fresh browser tab.
-3. Confirm the header says the stream is live and the diagnostics panel reports
-   the processor as online.
-4. Leave the page at the **Recommended first look** section.
+3. Confirm the header says **Backend connected**.
+4. Leave the page at **See a buy order become a trade**.
 
-The guided proof creates fresh data on every run. No order-book or trade result
-needs to be prepared in advance.
+The startup seed creates coherent waiting orders and history through the same
+public API and matching service used by the browser. The guided demo creates one fresh
+trade on every run; no result is inserted into React.
 
 ## Walkthrough script
 
@@ -21,41 +21,48 @@ needs to be prepared in advance.
 > every related state change atomically, and recovering live clients after a
 > failure.
 
-Point to **The real request path**. Explain that every visible result travels
-through the browser, FastAPI, PostgreSQL, the independent processor, and the
-matching engine. The page does not inject sample trades into React.
+Point to the market explanation. `NOVA` and `ORBIT` are independent fictional
+instruments, not currencies. A tick is an arbitrary price unit rather than a
+dollar. The selected order book provides the real seller used by the demo.
 
 ### 15-40 seconds: run the proof
 
-Select **Run the guided proof**.
+Select **Send this buyer and verify the trade**.
 
 As the four steps advance, say:
 
-> The browser is sending five real order requests. FastAPI validates and stores
-> each command before returning acceptance. The processor consumes the durable
-> sequence, builds resting liquidity, and the fifth order crosses the spread.
+> First the page reads the lowest waiting seller. It then sends one real buyer
+> at that exact price. FastAPI returns HTTP 202 with a correlation ID and a
+> durable command ID. The background matching service completes that command and the
+> page checks that REST and WebSocket report the same new trade ID.
 
-Do not move to another page. The step rail shows acceptance, processing,
-matching, and verification in one place.
+Do not move to another page. The Before, Action, and Result story and its four
+steps remain together. There is no second scenario panel to operate.
 
 ### 40-60 seconds: read the receipt
 
 When the run receipt appears, point to:
 
-- the five accepted commands;
-- the sequence advance;
+- the exact order sent and HTTP 202 acceptance;
+- the correlation, command, and order identifiers;
+- the command's completed sequence;
 - the matched quantity and price;
-- the newly persisted trade identifier;
+- the identical trade ID observed through REST and WebSocket;
 - the elapsed end-to-end time.
 
 Say:
 
-> The receipt appears only after the UI reads the new trade back from backend
-> state. REST and WebSocket are exposing the same committed result.
+> The receipt appears only after the command has completed and two independent
+> read paths expose the same committed trade. The highlighted row in Trade
+> history is the trade created by this click.
+
+Point to the open **How this request moves** section immediately beneath the
+demo. Its five handoffs connect the visible result to the browser, FastAPI,
+PostgreSQL, background matching service, and REST/WebSocket update on the page.
 
 ### 60-80 seconds: show operating evidence
 
-Point to **System diagnostics**:
+Expand **Engineering diagnostics** and point to **System diagnostics**:
 
 > This is not a static architecture diagram. The processor heartbeat, queue
 > depth, command latency, sequence integrity, and stream-recovery counters come
@@ -69,20 +76,22 @@ Finish with the recovery story:
 
 ## If there is another minute
 
-- Use **Seed visible depth** to create resting orders and show the order book.
-- Use **Cross the spread** to create another real match.
-- Place one limit order manually and cancel it to demonstrate the same public
-  command path outside the guided scenario.
-- Open `/api/v1/diagnostics/summary` to show the machine-readable evidence.
-- Open `/metrics` to show the monitoring surface.
+- Use **Place your own order** to demonstrate the same public command path
+  without the guided explanation.
+- Expand **Engineering diagnostics** to show operating evidence.
+- Open `/api/v1/diagnostics/summary` or `/metrics` for the machine-readable
+  surfaces.
 
 ## Questions the demo should answer
 
 **How do I know the UI is not faking the result?**
 
-The guided proof captures the existing trade IDs, submits through
-`POST /api/v1/orders`, waits for the commands, then requires a previously
-unseen matching trade from backend state before it displays a receipt.
+The guided demo reads the current best seller, submits one buyer through
+`POST /api/v1/orders`, waits for that exact command to reach `completed`, then
+requires a previously unseen trade containing its order ID. It shows success
+only after the same trade ID is independently observed in the REST response and
+the WebSocket event. The receipt exposes the server-generated identifiers so
+the claim can be checked rather than merely trusted.
 
 **Why not process the order inside the HTTP request?**
 

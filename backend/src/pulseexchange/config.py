@@ -29,8 +29,17 @@ class Settings(BaseSettings):
     database_url: str = (
         "postgresql+asyncpg://pulseexchange:pulseexchange@localhost:5433/pulseexchange"
     )
+    database_pool_size: int = Field(default=3, ge=1, le=20)
+    database_max_overflow: int = Field(default=2, ge=0, le=20)
+    database_pool_timeout_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
     cors_origins: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["http://localhost:3000", "http://localhost:5173"]
+        default_factory=lambda: ["http://localhost:3001", "http://localhost:5173"]
+    )
+    allowed_hosts: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["localhost", "127.0.0.1", "testserver", "api"]
+    )
+    websocket_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["http://localhost:3001", "http://localhost:5173"]
     )
     processor_poll_interval_ms: int = Field(default=150, ge=10, le=10_000)
     processor_error_backoff_ms: int = Field(default=1_000, ge=10, le=60_000)
@@ -47,8 +56,11 @@ class Settings(BaseSettings):
     trust_proxy_headers: bool = False
     max_request_body_bytes: int = Field(default=16_384, ge=512, le=10_000_000)
     max_queued_commands: int = Field(default=1_000, ge=1, le=1_000_000)
+    max_total_commands: int = Field(default=100_000, ge=100, le=10_000_000)
+    require_processor_for_readiness: bool = False
+    worker_health_port: int = Field(default=8002, ge=1_024, le=65_535)
 
-    @field_validator("cors_origins", mode="before")
+    @field_validator("cors_origins", "allowed_hosts", "websocket_origins", mode="before")
     @classmethod
     def split_origins(cls, value: object) -> object:
         """Accept a comma-separated environment variable as well as JSON."""

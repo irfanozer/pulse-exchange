@@ -7,11 +7,11 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from pulseexchange.market_profiles import SUPPORTED_SYMBOLS
 from pulseexchange.models import CommandStatus, CommandType, PersistedOrderStatus, PersistedSide
 
 Symbol = Annotated[str, Field(min_length=2, max_length=12, pattern=r"^[A-Za-z][A-Za-z0-9._-]*$")]
 OrderId = Annotated[str, Field(min_length=1, max_length=64)]
-SUPPORTED_SYMBOLS = frozenset({"NOVA", "ORBIT"})
 
 
 class ApiModel(BaseModel):
@@ -135,6 +135,18 @@ class BookResponse(ApiModel):
 class TradesResponse(ApiModel):
     items: list[TradeResponse]
     next_before: int | None
+
+
+class MarketProfileResponse(ApiModel):
+    symbol: str
+    display_name: str
+    description: str
+    activity_profile: str
+    reference_tick: int
+
+
+class MarketsResponse(ApiModel):
+    items: list[MarketProfileResponse]
 
 
 class RecoveredMarketEvent(ApiModel):

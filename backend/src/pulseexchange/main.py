@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from pulseexchange.api.routes import router
 from pulseexchange.broadcast import MarketBroadcaster
@@ -99,6 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(DemoSafetyMiddleware, settings=resolved)
     app.add_middleware(CorrelationMiddleware, metrics=http_metrics)
     app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=resolved.allowed_hosts)
     # CORS is registered last so it remains the outermost wrapper and adds
     # headers even to safety-limit and exception responses.
     app.add_middleware(

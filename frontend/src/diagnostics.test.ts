@@ -32,7 +32,7 @@ describe("diagnostics presentation", () => {
         api: { status: "online" },
         processor: { status: "offline", last_heartbeat_at: null, age_ms: null },
       },
-    }))).toBe("Processor offline");
+    }))).toBe("Matching service offline");
   });
 
   it("states the persisted sequence integrity result plainly", () => {

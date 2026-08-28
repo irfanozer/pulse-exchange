@@ -14,6 +14,11 @@ import { OrderBookPanel } from "./components/OrderBookPanel";
 import { TradeTape } from "./components/TradeTape";
 import { createGuidedDemoSteps, findNewTrade, updateDemoStep } from "./demo";
 import {
+  getInstrumentProfile,
+  INSTRUMENTS_EXPLAINED,
+  TICK_EXPLAINED,
+} from "./instruments";
+import {
   mergeTrades,
   normalizeOrderBook,
   normalizeTrade,
@@ -65,11 +70,16 @@ const initialClientEvidence = (): ClientEvidence => ({
 });
 
 const statusCopy: Record<ConnectionState, string> = {
-  connecting: "Connecting",
-  live: "Live stream",
-  reconnecting: "Reconnecting",
-  offline: "Live stream unavailable",
+  connecting: "Connecting to backend",
+  live: "Backend connected",
+  reconnecting: "Restoring live updates",
+  offline: "Backend updates unavailable",
 };
+
+interface StreamTradeEvidence {
+  eventId: number;
+  observedAt: string;
+}
 
 function App() {
   const [symbol, setSymbol] = useState<SymbolCode>("NOVA");
@@ -96,7 +106,7 @@ function App() {
   const lastOrderIdRef = useRef<string | null>(null);
   const pendingCancelOrderIdRef = useRef<string | null>(null);
   const lastReceivedEventIdRef = useRef(0);
-  const streamTradeIdsRef = useRef<Set<string>>(new Set());
+  const streamTradeEvidenceRef = useRef<Map<string, StreamTradeEvidence>>(new Map());
 
   const applyFreshBook = useCallback((nextBook: OrderBook, selected: SymbolCode): boolean => {
     if (activeSymbolRef.current !== selected) return false;
@@ -148,7 +158,7 @@ function App() {
     lastEventSequenceRef.current = -1;
     lastBookSequenceRef.current = -1;
     lastReceivedEventIdRef.current = 0;
-    streamTradeIdsRef.current = new Set();
+    streamTradeEvidenceRef.current = new Map();
     setBook(null);
     setTrades([]);
     setSequence(0);
@@ -313,7 +323,14 @@ function App() {
             applyFreshBook(normalizeOrderBook(message.book, symbol), symbol);
           }
           if (message.trades?.length) {
-            message.trades.forEach((trade) => streamTradeIdsRef.current.add(normalizeTrade(trade).id));
+            const observedAt = new Date().toISOString();
+            message.trades.forEach((trade) => {
+              const normalized = normalizeTrade(trade);
+              streamTradeEvidenceRef.current.set(normalized.id, {
+                eventId: Number.isFinite(incomingEventId) ? incomingEventId : 0,
+                observedAt,
+              });
+            });
             setTrades((current) => mergeTrades(current, message.trades ?? []));
           }
 
@@ -390,132 +407,86 @@ function App() {
     }
   };
 
-  const seedDepth = async () => {
-    setBusy("depth");
-    setError(null);
-    setNotice(null);
-    const base = BASE_TICK[symbol];
-    const orders = [
-      { symbol, side: "buy" as const, price: base - 2, quantity: 14 },
-      { symbol, side: "buy" as const, price: base - 1, quantity: 8 },
-      { symbol, side: "sell" as const, price: base + 2, quantity: 10 },
-      { symbol, side: "sell" as const, price: base + 3, quantity: 16 },
-    ];
-    try {
-      for (const order of orders) {
-        await submitOrder(order);
-        await wait(150);
-      }
-      setNotice("Four real order commands queued. Watch the live sequence as the engine processes them.");
-      await refreshMarket(symbol);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "The depth scenario could not finish.");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const crossSpread = async () => {
-    setBusy("cross");
-    setError(null);
-    setNotice(null);
-    const base = BASE_TICK[symbol];
-    try {
-      const current = await getBook(symbol);
-      const bestAsk = current.asks[0]?.price;
-      if (bestAsk === undefined) {
-        await submitOrder({ symbol, side: "sell", price: base + 1, quantity: 9 });
-        await wait(180);
-        await submitOrder({ symbol, side: "buy", price: base + 1, quantity: 5 });
-      } else {
-        await submitOrder({ symbol, side: "buy", price: bestAsk, quantity: Math.min(5, current.asks[0].quantity) });
-      }
-      setNotice("The match scenario commands are queued. Any resulting trade will arrive from the matching engine.");
-      await refreshMarket(symbol);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "The matching scenario could not finish.");
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const runGuidedDemo = async () => {
     const selected = symbol;
     const startedAt = performance.now();
-    let activeStep: GuidedDemoStep["id"] = "accept";
+    let activeStep: GuidedDemoStep["id"] = "observe";
     let acceptedRequests = 0;
 
     setBusy("guided");
     setError(null);
     setNotice(null);
     setDemoResult(null);
-    setDemoSteps(updateDemoStep(createGuidedDemoSteps(), "accept", "running"));
+    setDemoSteps(updateDemoStep(createGuidedDemoSteps(), "observe", "running"));
 
     try {
-      const [startingBook, startingTrades] = await Promise.all([
+      let [startingBook, startingTrades] = await Promise.all([
         getBook(selected),
         getTrades(selected),
       ]);
       const startingSequence = startingBook.sequence;
       const previousTradeIds = new Set(startingTrades.map((trade) => trade.id));
-      const base = BASE_TICK[selected];
-      const bestBid = startingBook.bids[0]?.price ?? base - 2;
-      const bestAsk = startingBook.asks[0]?.price ?? base + 2;
-      const restingBid = Math.max(1, Math.min(base - 1, bestAsk - 1));
-      const restingAsk = Math.max(base + 1, bestBid + 1, restingBid + 1);
-      const liquidityOrders = [
-        { symbol: selected, side: "buy" as const, price: Math.max(1, restingBid - 1), quantity: 12 },
-        { symbol: selected, side: "buy" as const, price: restingBid, quantity: 7 },
-        { symbol: selected, side: "sell" as const, price: restingAsk, quantity: 9 },
-        { symbol: selected, side: "sell" as const, price: restingAsk + 1, quantity: 15 },
-      ];
+      let targetAsk = startingBook.asks[0];
 
-      const liquidityCommandIds: string[] = [];
-      for (const order of liquidityOrders) {
-        const receipt = await placeOrder(order);
-        if (!receipt.commandId) {
-          throw new Error("The API accepted liquidity without returning a command receipt.");
-        }
-        liquidityCommandIds.push(receipt.commandId);
-        acceptedRequests += 1;
-      }
-      setDemoSteps((current) => updateDemoStep(
-        updateDemoStep(current, "accept", "complete", "Four HTTP 202 responses accepted real commands."),
-        "process",
-        "running",
-      ));
-
-      activeStep = "process";
-      const completedLiquidity = await pollUntil(
-        () => Promise.all(
-          liquidityCommandIds.map((commandId) => getCommand(commandId)),
-        ),
-        (commands) => commands.every((command) => command.status !== "queued"),
-      );
-      const rejectedLiquidity = completedLiquidity.find((command) => command.status !== "completed");
-      if (rejectedLiquidity) {
-        throw new Error(
-          rejectedLiquidity.error_message
-          ?? `Liquidity command ${rejectedLiquidity.command_id.slice(0, 8)} was rejected.`,
+      // A fresh Compose environment is pre-populated through the public API. If
+      // repeated public runs have consumed every seller, recreate exactly one
+      // transparently through that same API so the primary demo remains usable.
+      if (!targetAsk) {
+        setDemoSteps((current) => updateDemoStep(
+          current,
+          "observe",
+          "running",
+          "No seller was waiting, so this run is adding one through POST /orders first.",
+        ));
+        const fallbackPrice = Math.max(
+          BASE_TICK[selected] + 1,
+          (startingBook.bids[0]?.price ?? BASE_TICK[selected]) + 1,
         );
+        const fallbackReceipt = await placeOrder({
+          symbol: selected,
+          side: "sell",
+          price: fallbackPrice,
+          quantity: 8,
+        });
+        acceptedRequests += 1;
+        if (!fallbackReceipt.commandId) {
+          throw new Error("The API did not return a command ID for the fallback seller.");
+        }
+        const fallbackCommand = await pollUntil(
+          () => getCommand(fallbackReceipt.commandId as string),
+          (command) => command.status !== "queued",
+        );
+        if (fallbackCommand.status !== "completed") {
+          throw new Error(
+            fallbackCommand.error_message ?? "The fallback seller command was rejected.",
+          );
+        }
+        startingBook = await getBook(selected);
+        startingTrades = await getTrades(selected);
+        targetAsk = startingBook.asks[0];
       }
-      const stagedBook = await getBook(selected);
-      if (activeSymbolRef.current !== selected) throw new Error("The selected market changed during the run.");
-      applyFreshBook(stagedBook, selected);
+
+      if (!targetAsk) {
+        throw new Error("No waiting seller was available after the backend processed the setup order.");
+      }
+      if (activeSymbolRef.current !== selected) {
+        throw new Error("The selected instrument changed during the live demo.");
+      }
+
+      applyFreshBook(startingBook, selected);
+      setTrades((current) => mergeTrades(current, startingTrades));
       setDemoSteps((current) => updateDemoStep(
         updateDemoStep(
           current,
-          "process",
+          "observe",
           "complete",
-          `All four command receipts completed; PostgreSQL is at sequence ${stagedBook.sequence}.`,
+          `GET /book found ${targetAsk.quantity} units waiting at ${targetAsk.price} ticks.`,
         ),
-        "match",
+        "accept",
         "running",
       ));
 
-      activeStep = "match";
-      const targetAsk = stagedBook.asks[0];
-      if (!targetAsk) throw new Error("The engine did not expose a resting sell order to match.");
+      activeStep = "accept";
       const matchQuantity = Math.max(1, Math.min(5, targetAsk.quantity));
       const matchReceipt = await placeOrder({
         symbol: selected,
@@ -523,14 +494,47 @@ function App() {
         price: targetAsk.price,
         quantity: matchQuantity,
       });
-      if (!matchReceipt.orderId) throw new Error("The API accepted the match without returning an order ID.");
+      if (
+        !matchReceipt.orderId
+        || !matchReceipt.commandId
+        || !matchReceipt.correlationId
+        || matchReceipt.commandSequence === null
+        || !matchReceipt.createdAt
+      ) {
+        throw new Error("HTTP acceptance was missing one of its server-generated proof identifiers.");
+      }
       acceptedRequests += 1;
       setDemoSteps((current) => updateDemoStep(
         updateDemoStep(
           current,
-          "match",
+          "accept",
           "complete",
-          `Buy ${matchQuantity} @ ${targetAsk.price} crossed the best resting sell.`,
+          `HTTP ${matchReceipt.httpStatus} accepted buy ${matchQuantity} @ ${targetAsk.price}; command ${matchReceipt.commandId?.slice(0, 8)} queued.`,
+        ),
+        "process",
+        "running",
+      ));
+
+      activeStep = "process";
+      const completedCommand = await pollUntil(
+        () => getCommand(matchReceipt.commandId as string),
+        (command) => command.status !== "queued",
+      );
+      if (completedCommand.status !== "completed") {
+        throw new Error(
+          completedCommand.error_message
+          ?? `Command ${completedCommand.command_id.slice(0, 8)} was rejected.`,
+        );
+      }
+      if (!completedCommand.completed_at || completedCommand.result?.event_id === undefined) {
+        throw new Error("The matching service completed without returning durable event evidence.");
+      }
+      setDemoSteps((current) => updateDemoStep(
+        updateDemoStep(
+          current,
+          "process",
+          "complete",
+          `Command #${completedCommand.sequence} completed; PostgreSQL event #${completedCommand.result?.event_id} was committed.`,
         ),
         "verify",
         "running",
@@ -543,11 +547,18 @@ function App() {
       );
       const verifiedTrade = findNewTrade(verifiedTrades, previousTradeIds, matchReceipt.orderId);
       if (!verifiedTrade) throw new Error("The matching order completed without a readable trade record.");
-      await pollUntil(
-        async () => streamTradeIdsRef.current.has(verifiedTrade.id),
-        (observed) => observed,
+      if (!verifiedTrade.maker_order_id || !verifiedTrade.taker_order_id) {
+        throw new Error("The stored trade was missing its maker or taker order identity.");
+      }
+      const restObservedAtAfterMatch = new Date().toISOString();
+      const streamEvidence = await pollUntil(
+        async () => streamTradeEvidenceRef.current.get(verifiedTrade.id) ?? null,
+        (observed) => observed !== null,
         4_000,
       );
+      if (!streamEvidence) {
+        throw new Error("REST returned the trade, but the live WebSocket did not confirm it.");
+      }
       const endingBook = await getBook(selected);
       applyFreshBook(endingBook, selected);
       setTrades((current) => mergeTrades(current, verifiedTrades));
@@ -560,16 +571,32 @@ function App() {
       setDemoResult({
         durationMs: performance.now() - startedAt,
         requestsAccepted: acceptedRequests,
+        symbol: selected,
         startingSequence,
         endingSequence: endingBook.sequence,
+        httpStatus: matchReceipt.httpStatus,
+        correlationId: matchReceipt.correlationId,
+        commandId: matchReceipt.commandId,
+        commandSequence: completedCommand.sequence,
+        commandStatus: completedCommand.status,
+        commandCreatedAt: completedCommand.created_at,
+        commandCompletedAt: completedCommand.completed_at,
+        commandEventId: completedCommand.result.event_id as number,
+        orderId: matchReceipt.orderId,
         tradeId: verifiedTrade.id,
         tradeSequence: verifiedTrade.sequence,
+        makerOrderId: verifiedTrade.maker_order_id,
+        takerOrderId: verifiedTrade.taker_order_id,
+        restObservedAt: restObservedAtAfterMatch,
+        websocketTradeId: verifiedTrade.id,
+        websocketEventId: streamEvidence.eventId,
+        websocketObservedAt: streamEvidence.observedAt,
         price: verifiedTrade.price,
         quantity: verifiedTrade.quantity,
       });
       lastOrderIdRef.current = null;
       setLastOrder(null);
-      setNotice(`Guided proof complete: trade ${verifiedTrade.id} verified from backend state.`);
+      setNotice(`Trade ${verifiedTrade.id} was stored and independently confirmed by REST and WebSocket.`);
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : "The guided proof could not finish.";
       setDemoSteps((current) => updateDemoStep(current, activeStep, "failed", message));
@@ -604,6 +631,7 @@ function App() {
   };
 
   const writesPending = busy !== null || pendingCancelOrderId !== null;
+  const selectedInstrument = getInstrumentProfile(symbol);
 
   return (
     <div className="app-shell">
@@ -612,25 +640,29 @@ function App() {
           <span className="brand-mark">PX</span>
           <span><strong>PulseExchange</strong><small>Systems engineering demo</small></span>
         </a>
-        <div className={`connection-badge connection-badge--${connection}`}>
+        <div
+          className={`connection-badge connection-badge--${connection}`}
+          title={`Live updates arrive from the backend over WebSocket. #${sequence} is the latest completed command represented in the selected market.`}
+        >
           <span className="status-dot" aria-hidden="true" />
           <span>{statusCopy[connection]}</span>
-          <strong>SEQ {sequence.toLocaleString().padStart(6, "0")}</strong>
+          <strong>Latest market update #{sequence.toLocaleString()}</strong>
         </div>
       </header>
 
       <main id="top">
         <section className="hero">
           <div className="hero-copy">
-            <p className="eyebrow">Deterministic matching · real WebSocket updates</p>
-            <h1>Watch one ordered market state emerge.</h1>
+            <p className="eyebrow">Real API · real database · live update</p>
+            <h1>See one buy order become a trade.</h1>
             <p className="hero-summary">
-              Submit fictional limit orders and follow the real result from API acceptance to an ordered
-              market update. Every visible row comes from the backend—not a browser animation.
+              PulseExchange is a fictional market built to demonstrate reliable real-time software.
+              One button sends an actual HTTP order, stores it in PostgreSQL, matches it in a
+              background software service, and confirms the same trade through REST and WebSocket.
             </p>
             <div className="scope-note">
-              <strong>Engineering simulator only.</strong>
-              <span>No accounts, real assets, real prices, or money.</span>
+              <a href="#live-demo">Start the 30-second demo <span aria-hidden="true">↓</span></a>
+              <span>The later order form is optional. No accounts, real assets, or money are involved.</span>
             </div>
           </div>
 
@@ -647,19 +679,27 @@ function App() {
                   type="button"
                 >
                   <strong>{item}</strong>
-                  <span>{item === "NOVA" ? "Test market 01" : "Test market 02"}</span>
+                  <span>{getInstrumentProfile(item).label}</span>
                 </button>
               ))}
             </div>
+            <div className="instrument-explainer">
+              <strong>{symbol} · {selectedInstrument.label}</strong>
+              <p>{selectedInstrument.shortDescription}</p>
+              <small>{INSTRUMENTS_EXPLAINED}</small>
+              <small>{TICK_EXPLAINED}</small>
+            </div>
             <dl className="live-proof">
-              <div><dt>Transport</dt><dd>WebSocket</dd></div>
-              <div><dt>Ordering</dt><dd>Global sequence</dd></div>
-              <div><dt>View</dt><dd>Backend state</dd></div>
+              <div><dt>Market style</dt><dd>{symbol === "NOVA" ? "Deeper" : "Thinner"}</dd></div>
+              <div><dt>Typical area</dt><dd>{selectedInstrument.referencePrice} ticks</dd></div>
+              <div><dt>Live updates</dt><dd>WebSocket</dd></div>
             </dl>
           </div>
         </section>
 
         <GuidedDemo
+          symbol={symbol}
+          book={book}
           steps={demoSteps}
           result={demoResult}
           running={busy === "guided"}
@@ -667,29 +707,27 @@ function App() {
           onRun={runGuidedDemo}
         />
 
-        <section className="request-path" aria-labelledby="request-path-heading">
-          <div className="path-intro">
-            <p className="eyebrow">The real request path</p>
-            <h2 id="request-path-heading">One command. Five visible handoffs.</h2>
-          </div>
-          <ol className="path-steps">
-            <li><span>01</span><strong>Browser</strong><small>POST /api/v1/orders</small></li>
-            <li><span>02</span><strong>FastAPI</strong><small>Validate + idempotency</small></li>
-            <li><span>03</span><strong>PostgreSQL</strong><small>Persist + sequence</small></li>
-            <li><span>04</span><strong>Engine</strong><small>Price-time priority</small></li>
-            <li><span>05</span><strong>This screen</strong><small>WebSocket committed snapshot</small></li>
-          </ol>
-        </section>
-
-        <div className="diagnostics-wrap">
-          <DiagnosticsPanel
-            summary={diagnostics}
-            connection={connection}
-            sequence={sequence}
-            tradeCount={trades.length}
-            client={clientEvidence}
-          />
-        </div>
+        <details className="engineering-details engineering-details--core" open>
+          <summary>
+            <span className="engineering-details__label">
+              <strong>How this request moves</strong>
+              <small>Browser → API → database → matching service → this page.</small>
+            </span>
+          </summary>
+          <section className="request-path" aria-labelledby="request-path-heading">
+            <div className="path-intro">
+              <p className="eyebrow">What happens after you click</p>
+              <h2 id="request-path-heading">One order. Five real handoffs.</h2>
+            </div>
+            <ol className="path-steps">
+              <li><span>01</span><strong>Browser</strong><small>Sends POST /api/v1/orders</small></li>
+              <li><span>02</span><strong>FastAPI</strong><small>Validates and accepts it</small></li>
+              <li><span>03</span><strong>PostgreSQL</strong><small>Stores it before matching</small></li>
+              <li><span>04</span><strong>Matching service</strong><small>Backend software applies price-time priority</small></li>
+              <li><span>05</span><strong>This page</strong><small>REST + WebSocket confirm it</small></li>
+            </ol>
+          </section>
+        </details>
 
         {(error || notice) && (
           <div className={`message-bar ${error ? "message-bar--error" : "message-bar--success"}`} role="status">
@@ -702,15 +740,23 @@ function App() {
         <div className="dashboard-grid">
           <div className="market-column">
             <OrderBookPanel book={book} />
-            <TradeTape trades={trades} />
+            <TradeTape
+              trades={trades}
+              symbol={symbol}
+              highlightedTradeId={demoResult?.tradeId}
+            />
           </div>
 
           <aside className="control-column">
             <section className="panel order-panel">
               <div className="panel-heading">
-                <div><p className="eyebrow">Send a real command</p><h2>Place limit order</h2></div>
+                <div><p className="eyebrow">Optional sandbox</p><h2>Place your own order</h2></div>
                 <span className="api-chip">REST</span>
               </div>
+              <p className="order-panel__intro">
+                The live demo above is already complete. Use this form only if you want to
+                experiment with another buy or sell. {TICK_EXPLAINED}
+              </p>
               <form onSubmit={handleSubmit}>
                 <div className="side-toggle" aria-label="Order side">
                   <button type="button" aria-pressed={side === "buy"} disabled={writesPending} className={side === "buy" ? "active buy" : ""} onClick={() => setSide("buy")}>Buy</button>
@@ -737,22 +783,26 @@ function App() {
                 </div>
               )}
             </section>
-
-            <section className="panel scenario-panel">
-              <div className="panel-heading">
-                <div><p className="eyebrow">Generate real traffic</p><h2>Recruiter scenarios</h2></div>
-              </div>
-              <p className="panel-copy">These controls call the same public order API. They do not inject sample UI data.</p>
-              <button type="button" className="scenario-button" onClick={seedDepth} disabled={writesPending}>
-                <span><strong>Seed visible depth</strong><small>4 ordered REST requests</small></span><span>01</span>
-              </button>
-              <button type="button" className="scenario-button scenario-button--accent" onClick={crossSpread} disabled={writesPending}>
-                <span><strong>Cross the spread</strong><small>Create a real engine match</small></span><span>02</span>
-              </button>
-            </section>
-
           </aside>
         </div>
+
+        <details className="engineering-details engineering-details--last">
+          <summary>
+            <span className="engineering-details__label">
+              <strong>Engineering diagnostics</strong>
+              <small>Expand live matching-service, queue, latency, sequence, and stream evidence.</small>
+            </span>
+          </summary>
+          <div className="diagnostics-wrap">
+            <DiagnosticsPanel
+              summary={diagnostics}
+              connection={connection}
+              sequence={sequence}
+              tradeCount={trades.length}
+              client={clientEvidence}
+            />
+          </div>
+        </details>
       </main>
 
       <footer>

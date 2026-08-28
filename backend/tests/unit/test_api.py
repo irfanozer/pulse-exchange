@@ -41,6 +41,8 @@ def test_openapi_exposes_command_market_and_health_routes() -> None:
     assert "/api/v1/orders" in paths
     assert "/api/v1/orders/{order_id}" in paths
     assert "/api/v1/commands/{command_id}" in paths
+    assert "/api/v1/markets" in paths
+    assert "/api/v1/markets/{symbol}" in paths
     assert "/api/v1/markets/{symbol}/book" in paths
     assert "/api/v1/markets/{symbol}/trades" in paths
     assert "/api/v1/diagnostics/summary" in paths
@@ -84,6 +86,30 @@ def test_websocket_market_stream_is_registered() -> None:
     websocket_paths = {getattr(route, "path", None) for route in api.routes}
 
     assert "/api/v1/markets/{symbol}/stream" in websocket_paths
+
+
+@pytest.mark.asyncio
+async def test_websocket_rejects_an_unapproved_browser_origin() -> None:
+    state = SimpleNamespace(
+        settings=Settings(
+            processor_enabled=False,
+            websocket_origins=["https://pulseexchange.example"],
+        )
+    )
+
+    class _WebSocket:
+        def __init__(self) -> None:
+            self.app = SimpleNamespace(state=state)
+            self.headers = {"origin": "https://attacker.example"}
+            self.closed: tuple[int, str] | None = None
+
+        async def close(self, code: int, reason: str) -> None:
+            self.closed = (code, reason)
+
+    websocket = _WebSocket()
+    await market_stream(cast(Any, websocket), "NOVA")
+
+    assert websocket.closed == (1008, "websocket origin is not allowed")
 
 
 def test_path_symbols_are_limited_to_documented_fictional_markets() -> None:

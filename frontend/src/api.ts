@@ -1,6 +1,8 @@
 import type {
   CommandReceipt,
   DiagnosticsSummary,
+  MarketProfile,
+  MarketsResponse,
   OrderBook,
   OrderReceipt,
   OrderSide,
@@ -30,9 +32,23 @@ const requestJson = async <T>(path: string, init?: RequestInit): Promise<T> => {
   return (await response.json()) as T;
 };
 
+const stringOrNull = (value: unknown): string | null => (
+  typeof value === "string" && value.length > 0 ? value : null
+);
+
+const safeIntegerOrNull = (value: unknown): number | null => {
+  const candidate = Number(value);
+  return Number.isSafeInteger(candidate) ? candidate : null;
+};
+
 export const getBook = async (symbol: SymbolCode): Promise<OrderBook> => {
   const book = await requestJson<OrderBook>(`/markets/${symbol}/book`);
   return normalizeOrderBook(book, symbol);
+};
+
+export const getMarkets = async (): Promise<MarketProfile[]> => {
+  const response = await requestJson<MarketsResponse>("/markets");
+  return response.items;
 };
 
 export const getTrades = async (symbol: SymbolCode): Promise<Trade[]> => {
@@ -55,7 +71,7 @@ export const placeOrder = async (input: {
   price: number;
   quantity: number;
 }): Promise<OrderReceipt> => {
-  const response = await requestJson<Record<string, unknown>>("/orders", {
+  const httpResponse = await fetch(`${API_ROOT}/orders`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -63,17 +79,35 @@ export const placeOrder = async (input: {
     },
     body: JSON.stringify(input),
   });
+  if (!httpResponse.ok) throw new Error(await readError(httpResponse));
+
+  const response = (await httpResponse.json()) as Record<string, unknown>;
   const nested = typeof response.order === "object" && response.order !== null
     ? (response.order as Record<string, unknown>)
     : response;
-  const orderId = String(nested.id ?? nested.order_id ?? response.order_id ?? "") || null;
-  const commandId = String(response.command_id ?? "") || null;
-  const commandSequence = Number(response.sequence);
+  const orderId = stringOrNull(nested.id ?? nested.order_id ?? response.order_id);
+  const commandId = stringOrNull(response.command_id);
+  const commandSequence = safeIntegerOrNull(response.sequence);
+  const correlationId = httpResponse.headers.get("X-Correlation-ID")
+    ?? stringOrNull(response.correlation_id);
+  const status = response.status === "queued"
+    || response.status === "completed"
+    || response.status === "rejected"
+    ? response.status
+    : null;
   return {
     orderId,
     commandId,
-    commandSequence: Number.isSafeInteger(commandSequence) ? commandSequence : null,
-    message: orderId ? `Order command ${orderId.slice(0, 8)} queued` : "Order command queued",
+    commandSequence,
+    httpStatus: httpResponse.status,
+    correlationId,
+    location: httpResponse.headers.get("Location"),
+    status,
+    createdAt: stringOrNull(response.created_at),
+    completedAt: stringOrNull(response.completed_at),
+    message: orderId
+      ? `HTTP ${httpResponse.status} accepted order ${orderId.slice(0, 8)}`
+      : `HTTP ${httpResponse.status} accepted the order command`,
   };
 };
 

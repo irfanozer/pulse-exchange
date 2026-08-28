@@ -7,8 +7,8 @@ export const formatMilliseconds = (value: number | null): string => {
 };
 
 export const queueAssessment = (summary: DiagnosticsSummary): string => {
-  if (summary.services.processor.status === "offline") return "Processor offline";
-  if (summary.services.processor.status === "stale") return "Processor heartbeat stale";
+  if (summary.services.processor.status === "offline") return "Matching service offline";
+  if (summary.services.processor.status === "stale") return "Matching-service heartbeat stale";
   if (summary.queue.depth === 0) return "Queue drained";
   return `${summary.queue.depth.toLocaleString()} command${summary.queue.depth === 1 ? "" : "s"} waiting`;
 };

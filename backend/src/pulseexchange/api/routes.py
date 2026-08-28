@@ -34,15 +34,17 @@ from pulseexchange.market_data import (
     latest_market_event_id,
     recent_trades,
 )
+from pulseexchange.market_profiles import MARKET_PROFILES, SUPPORTED_SYMBOLS
 from pulseexchange.models import MarketCommand, OrderRecord
 from pulseexchange.observability import StreamStats
 from pulseexchange.runtime import PROCESSOR_SERVICE, latest_heartbeat
 from pulseexchange.schemas import (
-    SUPPORTED_SYMBOLS,
     BookResponse,
     CommandResponse,
     DiagnosticsSummary,
     HealthResponse,
+    MarketProfileResponse,
+    MarketsResponse,
     OrderResponse,
     QueuedCommandResponse,
     StreamHeartbeat,
@@ -117,6 +119,8 @@ async def ready_with_request(request: Request) -> HealthResponse:
             heartbeat_age.total_seconds()
             <= request.app.state.settings.processor_heartbeat_stale_seconds
         )
+    if request.app.state.settings.require_processor_for_readiness and not processor_running:
+        raise HTTPException(status_code=503, detail="command processor is not ready")
     return HealthResponse(
         status="ok",
         processor_running=processor_running,
@@ -210,6 +214,7 @@ async def submit_order(
         quantity=body.quantity,
         correlation_id=request.state.correlation_id,
         max_queued_commands=request.app.state.settings.max_queued_commands,
+        max_total_commands=request.app.state.settings.max_total_commands,
     )
     response.headers["Location"] = f"/api/v1/commands/{command.command_id}"
     return QueuedCommandResponse.from_command(command)
@@ -236,6 +241,7 @@ async def cancel_order(
         order_id=order_id,
         correlation_id=request.state.correlation_id,
         max_queued_commands=request.app.state.settings.max_queued_commands,
+        max_total_commands=request.app.state.settings.max_total_commands,
     )
     response.headers["Location"] = f"/api/v1/commands/{command.command_id}"
     return QueuedCommandResponse.from_command(command)
@@ -263,6 +269,24 @@ async def get_command(
     if command is None:
         raise HTTPException(status_code=404, detail="command not found")
     return CommandResponse.model_validate(command)
+
+
+@api.get("/markets", response_model=MarketsResponse, tags=["markets"])
+async def list_markets() -> MarketsResponse:
+    """Describe the independent fictional instruments shown by the demo."""
+
+    return MarketsResponse(
+        items=[
+            MarketProfileResponse.model_validate(profile) for profile in MARKET_PROFILES.values()
+        ]
+    )
+
+
+@api.get("/markets/{symbol}", response_model=MarketProfileResponse, tags=["markets"])
+async def get_market(symbol: str) -> MarketProfileResponse:
+    """Return the display profile for one fictional instrument."""
+
+    return MarketProfileResponse.model_validate(MARKET_PROFILES[normalize_symbol(symbol)])
 
 
 @api.get("/markets/{symbol}/book", response_model=BookResponse, tags=["markets"])
@@ -300,6 +324,11 @@ async def market_stream(
     symbol: str,
     after_event_id: int | None = Query(default=None, ge=0),
 ) -> None:
+    origin = getattr(websocket, "headers", {}).get("origin")
+    allowed_origins: list[str] = websocket.app.state.settings.websocket_origins
+    if origin is not None and origin not in allowed_origins:
+        await websocket.close(code=1008, reason="websocket origin is not allowed")
+        return
     try:
         clean_symbol = normalize_symbol(symbol)
     except HTTPException:

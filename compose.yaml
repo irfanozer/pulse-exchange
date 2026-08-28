@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-pulseexchange}
       POSTGRES_USER: ${POSTGRES_USER:-pulseexchange}
@@ -42,7 +42,10 @@ services:
       PULSEEXCHANGE_TRUST_PROXY_HEADERS: "true"
       PULSEEXCHANGE_MAX_REQUEST_BODY_BYTES: ${PULSEEXCHANGE_MAX_REQUEST_BODY_BYTES:-16384}
       PULSEEXCHANGE_MAX_QUEUED_COMMANDS: ${PULSEEXCHANGE_MAX_QUEUED_COMMANDS:-1000}
+      PULSEEXCHANGE_MAX_TOTAL_COMMANDS: ${PULSEEXCHANGE_MAX_TOTAL_COMMANDS:-100000}
       PULSEEXCHANGE_CORS_ORIGINS: ${PULSEEXCHANGE_CORS_ORIGINS:-["http://localhost:3001","http://localhost:5173"]}
+      PULSEEXCHANGE_ALLOWED_HOSTS: ${PULSEEXCHANGE_ALLOWED_HOSTS:-["api","localhost","127.0.0.1","testserver"]}
+      PULSEEXCHANGE_WEBSOCKET_ORIGINS: ${PULSEEXCHANGE_WEBSOCKET_ORIGINS:-["http://localhost:3001","http://localhost:5173"]}
     command: ["uvicorn", "pulseexchange.main:app", "--host", "0.0.0.0", "--port", "8000"]
     depends_on:
       migrate:
@@ -64,11 +67,33 @@ services:
       PULSEEXCHANGE_PROCESSOR_POLL_INTERVAL_MS: ${PULSEEXCHANGE_PROCESSOR_POLL_INTERVAL_MS:-50}
       PULSEEXCHANGE_PROCESSOR_HEARTBEAT_INTERVAL_SECONDS: ${PULSEEXCHANGE_PROCESSOR_HEARTBEAT_INTERVAL_SECONDS:-2}
       PULSEEXCHANGE_PROCESSOR_ERROR_BACKOFF_MS: ${PULSEEXCHANGE_PROCESSOR_ERROR_BACKOFF_MS:-1000}
+      PULSEEXCHANGE_WORKER_HEALTH_PORT: ${PULSEEXCHANGE_WORKER_HEALTH_PORT:-8002}
     command: ["python", "-m", "pulseexchange.worker"]
     depends_on:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/ready')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  seed:
+    build:
+      context: ./backend
+    environment:
+      PULSEEXCHANGE_SEED_MARKET: ${PULSEEXCHANGE_SEED_MARKET:-true}
+      PULSEEXCHANGE_SEED_BASE_URL: http://api:8000
+      PULSEEXCHANGE_SEED_STARTUP_TIMEOUT_SECONDS: ${PULSEEXCHANGE_SEED_STARTUP_TIMEOUT_SECONDS:-90}
+      PULSEEXCHANGE_SEED_COMMAND_TIMEOUT_SECONDS: ${PULSEEXCHANGE_SEED_COMMAND_TIMEOUT_SECONDS:-20}
+    command: ["python", "-m", "pulseexchange.seed"]
+    depends_on:
+      api:
+        condition: service_healthy
+      processor:
+        condition: service_healthy
+    restart: "no"
 
   frontend:
     build:
@@ -78,8 +103,10 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      seed:
+        condition: service_completed_successfully
     ports:
-      - "3001:80"
+      - "3001:8080"
 
 volumes:
   pulseexchange-postgres:

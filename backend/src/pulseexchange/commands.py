@@ -71,6 +71,7 @@ async def _persist_idempotently(
     command: MarketCommand,
     *,
     max_queued_commands: int | None = None,
+    max_total_commands: int | None = None,
 ) -> MarketCommand:
     """Serialize acceptance, then commit or return the prior semantic request.
 
@@ -88,6 +89,13 @@ async def _persist_idempotently(
             existing = await _existing_by_key(session, command.idempotency_key)
             if existing is not None:
                 return _return_or_conflict(existing, command)
+            if max_total_commands is not None:
+                total = await session.scalar(select(func.count(MarketCommand.sequence)))
+                if int(total or 0) >= max_total_commands:
+                    raise QueueCapacityError(
+                        "the public demo reached its durable command limit; "
+                        "scheduled maintenance will reset it"
+                    )
             if max_queued_commands is not None:
                 queued = await session.scalar(
                     select(func.count(MarketCommand.sequence)).where(
@@ -121,6 +129,7 @@ async def enqueue_submit(
     quantity: int,
     correlation_id: str | None = None,
     max_queued_commands: int | None = None,
+    max_total_commands: int | None = None,
 ) -> MarketCommand:
     """Accept an order submission without waiting for matching to complete."""
 
@@ -142,6 +151,7 @@ async def enqueue_submit(
         session,
         command,
         max_queued_commands=max_queued_commands,
+        max_total_commands=max_total_commands,
     )
 
 
@@ -153,6 +163,7 @@ async def enqueue_cancel(
     order_id: str,
     correlation_id: str | None = None,
     max_queued_commands: int | None = None,
+    max_total_commands: int | None = None,
 ) -> MarketCommand:
     """Accept a cancellation for ordered background processing."""
 
@@ -169,4 +180,5 @@ async def enqueue_cancel(
         session,
         command,
         max_queued_commands=max_queued_commands,
+        max_total_commands=max_total_commands,
     )

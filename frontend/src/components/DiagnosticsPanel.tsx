@@ -72,11 +72,11 @@ export const DiagnosticsPanel = ({
         <span className="source-chip source-chip--live">Live service data</span>
       </div>
       <p className="diagnostics-panel__note">
-        These values come from the API, processor, command journal, market tables, and active streams.
+        These values come from the API, matching service, command journal, market tables, and active streams.
         They refresh automatically and are not estimated in the browser.
       </p>
       <div className="diagnostics-grid">
-        <Diagnostic value={summary.services.processor.status} label="Processor" detail={queueAssessment(summary)} tone={processorHealthy ? "good" : "warn"} />
+        <Diagnostic value={summary.services.processor.status} label="Matching service" detail={queueAssessment(summary)} tone={processorHealthy ? "good" : "warn"} />
         <Diagnostic value={summary.queue.depth.toLocaleString()} label="Queue depth" detail={`Oldest: ${formatMilliseconds(summary.queue.oldest_age_ms)}`} tone={summary.queue.depth === 0 ? "good" : "warn"} />
         <Diagnostic value={formatMilliseconds(summary.commands.latency_ms.p95)} label="P95 latency" detail={`P50 ${formatMilliseconds(summary.commands.latency_ms.p50)} · P99 ${formatMilliseconds(summary.commands.latency_ms.p99)}`} />
         <Diagnostic value={`${summary.commands.completed.toLocaleString()} / ${summary.commands.accepted.toLocaleString()}`} label="Completed" detail={`${summary.commands.rejected.toLocaleString()} rejected commands`} />

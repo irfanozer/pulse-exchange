@@ -1,6 +1,8 @@
 export type SymbolCode = "NOVA" | "ORBIT";
 export type OrderSide = "buy" | "sell";
 export type ConnectionState = "connecting" | "live" | "reconnecting" | "offline";
+export type CommandType = "submit_order" | "cancel_order";
+export type CommandStatus = "queued" | "completed" | "rejected";
 
 export interface BookLevel {
   price: number;
@@ -14,6 +16,18 @@ export interface OrderBook {
   event_id?: number;
   bids: BookLevel[];
   asks: BookLevel[];
+}
+
+export interface MarketProfile {
+  symbol: SymbolCode;
+  display_name: string;
+  description: string;
+  activity_profile: string;
+  reference_tick: number;
+}
+
+export interface MarketsResponse {
+  items: MarketProfile[];
 }
 
 export interface Trade {
@@ -74,15 +88,35 @@ export interface OrderReceipt {
   orderId: string | null;
   commandId: string | null;
   commandSequence: number | null;
+  httpStatus: number;
+  correlationId: string | null;
+  location: string | null;
+  status: CommandStatus | null;
+  createdAt: string | null;
+  completedAt: string | null;
   message: string;
+}
+
+export interface CommandResult {
+  event_id?: number;
+  order_ids?: string[];
+  trade_sequences?: number[];
+  [key: string]: unknown;
 }
 
 export interface CommandReceipt {
   command_id: string;
   correlation_id: string;
   sequence: number;
-  status: "queued" | "completed" | "rejected";
+  command_type: CommandType;
+  status: CommandStatus;
+  symbol: SymbolCode;
+  payload: Record<string, unknown>;
+  result: CommandResult | null;
+  error_code: string | null;
   error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
 }
 
 export type ServiceStatus = "online" | "stale" | "offline";
@@ -137,7 +171,7 @@ export interface ClientEvidence {
 export type DemoStepStatus = "waiting" | "running" | "complete" | "failed";
 
 export interface GuidedDemoStep {
-  id: "accept" | "process" | "match" | "verify";
+  id: "observe" | "accept" | "process" | "verify";
   title: string;
   detail: string;
   status: DemoStepStatus;
@@ -146,10 +180,26 @@ export interface GuidedDemoStep {
 export interface GuidedDemoResult {
   durationMs: number;
   requestsAccepted: number;
+  symbol: SymbolCode;
   startingSequence: number;
   endingSequence: number;
+  httpStatus: number;
+  correlationId: string;
+  commandId: string;
+  commandSequence: number;
+  commandStatus: CommandStatus;
+  commandCreatedAt: string;
+  commandCompletedAt: string;
+  commandEventId: number;
+  orderId: string;
   tradeId: string;
   tradeSequence: number;
+  makerOrderId: string;
+  takerOrderId: string;
+  restObservedAt: string;
+  websocketTradeId: string;
+  websocketEventId: number;
+  websocketObservedAt: string;
   price: number;
   quantity: number;
 }

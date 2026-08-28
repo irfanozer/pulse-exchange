@@ -26,6 +26,9 @@ def create_engine(settings: Settings | None = None) -> AsyncEngine:
         resolved.database_url,
         pool_pre_ping=True,
         pool_recycle=300,
+        pool_size=resolved.database_pool_size,
+        max_overflow=resolved.database_max_overflow,
+        pool_timeout=resolved.database_pool_timeout_seconds,
     )
 
 

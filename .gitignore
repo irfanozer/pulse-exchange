@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.azure-cli-validation/
 .coverage
 htmlcov/
 
@@ -17,4 +18,3 @@ coverage/
 .vscode/
 .DS_Store
 Thumbs.db
-

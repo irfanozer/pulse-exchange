@@ -129,10 +129,20 @@ class CommandProcessor:
         self._running = False
         self._instance_id = str(uuid.uuid4())
         self._started_at = datetime.now(UTC)
+        self._last_heartbeat_monotonic: float | None = None
 
     @property
     def running(self) -> bool:
         return self._running
+
+    @property
+    def heartbeat_fresh(self) -> bool:
+        """Return whether this process recently completed a database heartbeat."""
+
+        if self._last_heartbeat_monotonic is None:
+            return False
+        age = time.monotonic() - self._last_heartbeat_monotonic
+        return age <= self._settings.processor_heartbeat_stale_seconds
 
     def stop(self) -> None:
         self._stop.set()
@@ -152,6 +162,7 @@ class CommandProcessor:
                             instance_id=self._instance_id,
                             started_at=self._started_at,
                         )
+                        self._last_heartbeat_monotonic = time.monotonic()
                         next_heartbeat = now + self._settings.processor_heartbeat_interval_seconds
                     processed = await self.process_once()
                 except asyncio.CancelledError:

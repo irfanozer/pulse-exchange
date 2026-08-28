@@ -1,7 +1,8 @@
 # Operations guide
 
-This guide covers the local application runtime. Hosting-provider resources,
-DNS, certificates, and cloud deployment are intentionally outside its scope.
+This guide covers the local application runtime and application-level incident
+checks. Azure provisioning, DNS, certificates, releases, and production
+verification are documented in [deployment.md](deployment.md).
 
 ## Service roles
 

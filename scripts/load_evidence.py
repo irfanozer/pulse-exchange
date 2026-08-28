@@ -227,7 +227,7 @@ async def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "started_at": started_at.isoformat(),
             "symbol": args.symbol,
-            "price_minor_units": args.price,
+            "price_ticks": args.price,
             "pairs": args.pairs,
             "commands": expected_commands,
             "concurrency": args.concurrency,
@@ -314,7 +314,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pairs", type=int, default=40)
     parser.add_argument("--concurrency", type=int, default=10)
     parser.add_argument("--symbol", choices=("NOVA", "ORBIT"), default="ORBIT")
-    parser.add_argument("--price", type=int, default=25_000)
+    parser.add_argument(
+        "--price",
+        type=int,
+        default=48,
+        help="Whole-number simulator price in ticks (default: %(default)s)",
+    )
     parser.add_argument("--timeout-seconds", type=float, default=30)
     parser.add_argument(
         "--output-prefix",
