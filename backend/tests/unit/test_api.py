@@ -49,7 +49,21 @@ def test_openapi_exposes_command_market_and_health_routes() -> None:
 
 
 def test_local_database_default_matches_compose_host_port() -> None:
-    assert "@localhost:5433/" in Settings().database_url
+    default_database_url = Settings.model_fields["database_url"].default
+
+    assert isinstance(default_database_url, str)
+    assert "@localhost:5433/" in default_database_url
+
+
+def test_database_url_can_be_overridden_by_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ci_database_url = (
+        "postgresql+asyncpg://pulseexchange:pulseexchange@localhost:5432/pulseexchange_test"
+    )
+    monkeypatch.setenv("PULSEEXCHANGE_DATABASE_URL", ci_database_url)
+
+    assert Settings(_env_file=None).database_url == ci_database_url
 
 
 def test_cors_origins_accept_json_or_comma_separated_environment_values(
