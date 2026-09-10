@@ -1,11 +1,14 @@
 import { TICK_EXPLAINED } from "../instruments";
 import type { SymbolCode, Trade } from "../types";
 
-const formatTime = (value: string): string => {
+const formatRecorded = (value: string): { date: string; time: string } | null => {
   const date = new Date(value);
   return Number.isNaN(date.valueOf())
-    ? "Unavailable"
-    : date.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    ? null
+    : {
+      date: date.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" }),
+      time: date.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+    };
 };
 
 interface TradeTapeProps {
@@ -39,6 +42,7 @@ export const TradeTape = ({ trades, symbol, highlightedTradeId, loading = false 
         </div>
         {trades.length ? trades.slice(0, 9).map((trade) => {
           const highlighted = trade.id === highlightedTradeId;
+          const recorded = formatRecorded(trade.created_at);
           return (
             <div className={`trade-row ${highlighted ? "trade-row--highlighted" : ""}`} role="row" key={trade.id}>
               <span className="trade-sequence" role="cell">
@@ -47,7 +51,12 @@ export const TradeTape = ({ trades, symbol, highlightedTradeId, loading = false 
               </span>
               <strong role="cell">{trade.price.toLocaleString()}</strong>
               <span role="cell">{trade.quantity.toLocaleString()}</span>
-              <time role="cell" dateTime={trade.created_at}>{formatTime(trade.created_at)}</time>
+              {recorded ? (
+                <time className="trade-recorded" role="cell" dateTime={trade.created_at} title="Your local date and time">
+                  <span>{recorded.time}</span>
+                  <span className="trade-date">{recorded.date}</span>
+                </time>
+              ) : <span role="cell">Unavailable</span>}
             </div>
           );
         }) : (
