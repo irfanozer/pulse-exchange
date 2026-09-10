@@ -7,6 +7,7 @@ import type {
   OrderReceipt,
   OrderSide,
   SymbolCode,
+  StoredOrder,
   Trade,
   TradeWire,
 } from "./types";
@@ -14,7 +15,11 @@ import { normalizeOrderBook, normalizeTrade } from "./market";
 
 const API_ROOT = "/api/v1";
 
-const idempotencyKey = (): string =>
+export class ApiResponseError extends Error {
+  constructor(public readonly status: number, message: string) { super(message); }
+}
+
+export const idempotencyKey = (): string =>
   globalThis.crypto?.randomUUID?.() ?? `px-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const readError = async (response: Response): Promise<string> => {
@@ -65,21 +70,24 @@ export const getDiagnosticsSummary = async (): Promise<DiagnosticsSummary> =>
 export const getCommand = async (commandId: string): Promise<CommandReceipt> =>
   requestJson<CommandReceipt>(`/commands/${encodeURIComponent(commandId)}`);
 
+export const getOrder = async (orderId: string): Promise<StoredOrder> =>
+  requestJson<StoredOrder>(`/orders/${encodeURIComponent(orderId)}`);
+
 export const placeOrder = async (input: {
   symbol: SymbolCode;
   side: OrderSide;
   price: number;
   quantity: number;
-}): Promise<OrderReceipt> => {
+}, requestKey = idempotencyKey()): Promise<OrderReceipt> => {
   const httpResponse = await fetch(`${API_ROOT}/orders`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Idempotency-Key": idempotencyKey(),
+      "Idempotency-Key": requestKey,
     },
     body: JSON.stringify(input),
   });
-  if (!httpResponse.ok) throw new Error(await readError(httpResponse));
+  if (!httpResponse.ok) throw new ApiResponseError(httpResponse.status, await readError(httpResponse));
 
   const response = (await httpResponse.json()) as Record<string, unknown>;
   const nested = typeof response.order === "object" && response.order !== null
@@ -111,15 +119,16 @@ export const placeOrder = async (input: {
   };
 };
 
-export const cancelOrder = async (orderId: string, symbol: SymbolCode): Promise<void> => {
+export const cancelOrder = async (orderId: string, symbol: SymbolCode, requestKey = idempotencyKey()): Promise<CommandReceipt> => {
   const response = await fetch(
     `${API_ROOT}/orders/${encodeURIComponent(orderId)}?symbol=${symbol}`,
     {
     method: "DELETE",
-    headers: { "Idempotency-Key": idempotencyKey() },
+    headers: { "Idempotency-Key": requestKey },
     },
   );
   if (!response.ok) throw new Error(await readError(response));
+  return (await response.json()) as CommandReceipt;
 };
 
 export const marketStreamPath = (symbol: SymbolCode, afterEventId?: number): string => {

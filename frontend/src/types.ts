@@ -97,6 +97,25 @@ export interface OrderReceipt {
   message: string;
 }
 
+export interface StoredOrder {
+  order_id: string;
+  symbol: SymbolCode;
+  side: OrderSide;
+  price: number;
+  quantity: number;
+  remaining_quantity: number;
+  status: "open" | "partially_filled" | "filled" | "cancelled";
+  updated_at: string;
+}
+
+export interface PracticeOffer {
+  receipt: OrderReceipt;
+  price: number;
+  sellerPrice: number | null;
+  order: StoredOrder | null;
+  cancellation?: { key: string; command: CommandReceipt | null };
+}
+
 export interface CommandResult {
   event_id?: number;
   order_ids?: string[];

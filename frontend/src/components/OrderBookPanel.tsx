@@ -45,11 +45,11 @@ export const OrderBookPanel = ({ book }: { book: OrderBook | null }) => {
       <div className="panel-heading">
         <div>
           <p className="eyebrow">{book?.symbol ?? "Market"} · waiting orders</p>
-          <h2 id="order-book-heading">Who is waiting to buy or sell?</h2>
+          <h2 id="order-book-heading">Waiting orders</h2>
         </div>
         <div className="spread-readout">
           <span>Gap between prices</span>
-          <strong>{spread === null ? "Waiting for both sides" : `${spread} ${spread === 1 ? "tick" : "ticks"}`}</strong>
+          <strong>{book === null ? "Loading market…" : spread === null ? "Waiting for both sides" : `${spread} ${spread === 1 ? "tick" : "ticks"}`}</strong>
         </div>
       </div>
 
@@ -64,14 +64,14 @@ export const OrderBookPanel = ({ book }: { book: OrderBook | null }) => {
             <strong>Buyers</strong><span>Highest price first</span>
           </div>
           <div className="level-labels"><span>Price (ticks)</span><span>Units</span><span>Orders</span></div>
-          <LevelRows levels={book?.bids ?? []} side="bid" maxQuantity={maximum} />
+          {book === null ? <div className="book-empty">Loading buy offers…</div> : <LevelRows levels={book.bids} side="bid" maxQuantity={maximum} />}
         </div>
         <div className="book-side">
           <div className="book-side-title book-side-title--ask">
             <strong>Sellers</strong><span>Lowest price first</span>
           </div>
           <div className="level-labels"><span>Price (ticks)</span><span>Units</span><span>Orders</span></div>
-          <LevelRows levels={book?.asks ?? []} side="ask" maxQuantity={maximum} />
+          {book === null ? <div className="book-empty">Loading sell offers…</div> : <LevelRows levels={book.asks} side="ask" maxQuantity={maximum} />}
         </div>
       </div>
       <p className="panel-footnote">{TICK_EXPLAINED}</p>

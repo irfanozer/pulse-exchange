@@ -190,6 +190,10 @@ jobs:
             --only-show-errors 2>/dev/null || true)"
 
           if [[ -z "$existing_web_app" ]]; then
+            if [[ "$REQUIRE_CUSTOM_DOMAIN" == "true" ]]; then
+              echo "The existing web app could not be read. Stopping to protect its required hostname and certificate." >&2
+              exit 1
+            fi
             echo "First deployment: using the generated Azure hostname until DNS and the managed certificate are configured."
             echo "domain_name=" >> "$GITHUB_OUTPUT"
             echo "certificate_id=" >> "$GITHUB_OUTPUT"

@@ -4,7 +4,7 @@ import type { SymbolCode, Trade } from "../types";
 const formatTime = (value: string): string => {
   const date = new Date(value);
   return Number.isNaN(date.valueOf())
-    ? "—"
+    ? "Unavailable"
     : date.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
 };
 
@@ -12,9 +12,10 @@ interface TradeTapeProps {
   trades: Trade[];
   symbol?: SymbolCode;
   highlightedTradeId?: string | null;
+  loading?: boolean;
 }
 
-export const TradeTape = ({ trades, symbol, highlightedTradeId }: TradeTapeProps) => {
+export const TradeTape = ({ trades, symbol, highlightedTradeId, loading = false }: TradeTapeProps) => {
   const visibleSymbol = symbol ?? trades[0]?.symbol;
 
   return (
@@ -24,11 +25,10 @@ export const TradeTape = ({ trades, symbol, highlightedTradeId }: TradeTapeProps
           <p className="eyebrow">{visibleSymbol ?? "Market"} · completed matches</p>
           <h2 id="trade-tape-heading">Trade history</h2>
         </div>
-        <span className="record-count">Latest {trades.length} stored {trades.length === 1 ? "trade" : "trades"}</span>
+        <span className="record-count">{loading && !trades.length ? "Loading…" : `${Math.min(trades.length, 9)} recent ${trades.length === 1 ? "trade" : "trades"}`}</span>
       </div>
       <p className="panel-explainer">
-        Every row is a completed match returned by the backend. The newest verified demo trade is
-        highlighted so it is easy to connect the button press to its result.
+        Completed matches, newest first. Your demo trade is marked when it appears in this list.
       </p>
       <div className="trade-table" role="table" aria-label={`Stored ${visibleSymbol ?? "fictional"} trades`}>
         <div className="trade-row trade-row--heading" role="row">
@@ -43,7 +43,7 @@ export const TradeTape = ({ trades, symbol, highlightedTradeId }: TradeTapeProps
             <div className={`trade-row ${highlighted ? "trade-row--highlighted" : ""}`} role="row" key={trade.id}>
               <span className="trade-sequence" role="cell">
                 <span>#{trade.sequence.toLocaleString()}</span>
-                {highlighted && <b>Created by live demo</b>}
+                {highlighted && <b>Your demo trade</b>}
               </span>
               <strong role="cell">{trade.price.toLocaleString()}</strong>
               <span role="cell">{trade.quantity.toLocaleString()}</span>
@@ -52,8 +52,8 @@ export const TradeTape = ({ trades, symbol, highlightedTradeId }: TradeTapeProps
           );
         }) : (
           <div className="trade-empty">
-            <strong>No stored trades for this instrument yet.</strong>
-            <span>The primary demo will create one as soon as a seller is waiting.</span>
+            <strong>{loading ? "Loading trade history…" : "No trades yet."}</strong>
+            <span>{loading ? "Waiting for recorded matches." : "Place a matching offer, or open the guided example below."}</span>
           </div>
         )}
       </div>

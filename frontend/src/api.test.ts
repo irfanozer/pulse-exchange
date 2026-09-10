@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getCommand,
+  getOrder,
+  cancelOrder,
   getDiagnosticsSummary,
   getMarkets,
   marketStreamPath,
@@ -68,6 +70,22 @@ describe("market profiles API", () => {
 });
 
 describe("durable command receipts", () => {
+  it("reads the actual order state including a cancelled unfilled remainder", async () => {
+    const payload = { order_id: "order/1", status: "cancelled", remaining_quantity: 1 };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload)));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await getOrder("order/1")).toEqual(payload);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/orders/order%2F1", undefined);
+  });
+
+  it("preserves the cancellation command and caller's retry key", async () => {
+    const payload = { command_id: "cancel-1", status: "queued" };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await cancelOrder("order/1", "ORBIT", "same-cancel-key")).toEqual(payload);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/orders/order%2F1?symbol=ORBIT", expect.objectContaining({ method: "DELETE", headers: { "Idempotency-Key": "same-cancel-key" } }));
+  });
+
   it("keeps both command and order identities from an accepted order", async () => {
     vi.stubGlobal("crypto", { randomUUID: () => "idempotency-test-key" });
     vi.stubGlobal(

@@ -1,123 +1,105 @@
-# 60-90 second demo
+# Quick demo walkthrough
 
-## Before the call
+## Start locally
 
-1. Start the complete stack with `docker compose up --build`.
-2. Open http://localhost:3001 in a fresh browser tab.
-3. Confirm the header says **Backend connected**.
-4. Leave the page at **See a buy order become a trade**.
+1. Start the stack with `docker compose up --build`.
+2. Open http://localhost:3001.
+3. Wait for the market to load and the header to show **Live updates connected**.
 
-The startup seed creates coherent waiting orders and history through the same
-public API and matching service used by the browser. The guided demo creates one fresh
-trade on every run; no result is inserted into React.
+The connection label describes WebSocket connectivity, not the health of every
+service. Matching-service health is available in the optional backend details.
 
-## Walkthrough script
+## Explain it in one sentence
 
-### 0-15 seconds: define the problem
+> PulseExchange matches a buyer with a seller, saves the trade, and sends the
+> result back to the page live.
 
-> PulseExchange is a real-time exchange simulator focused on backend
-> correctness. The interesting part is not the trading theme; it is accepting
-> concurrent requests, applying them in one deterministic order, committing
-> every related state change atomically, and recovering live clients after a
-> failure.
+NOVA and ORBIT are separate fictional markets, not currencies. Each has its own
+orders and trades. Ticks are pretend price units, not dollars. No real assets or
+money are involved.
 
-Point to the market explanation. `NOVA` and `ORBIT` are independent fictional
-instruments, not currencies. A tick is an arbitrary price unit rather than a
-dollar. The selected order book provides the real seller used by the demo.
+## Make a trade
 
-### 15-40 seconds: run the proof
+The main screen keeps the **Price history** graph next to **Place an offer**.
+Choose **Buy** or **Sell**, enter a price and quantity, and send the offer.
+Buying at a waiting seller's price, or selling at a waiting buyer's price, can
+create a trade. The market is shared, so another visitor may match first.
 
-Select **Send this buyer and verify the trade**.
+An offer without a match waits in **Waiting orders**. It does not move the graph.
+**Trade history** shows completed matches. The graph plots up to 30 recent
+recorded trades, oldest to newest by trade number, not by elapsed time. It does
+not invent price movement when the market is quiet.
 
-As the four steps advance, say:
+Your latest accepted order has a **Cancel remaining units** action. Units that
+have already traded cannot be cancelled. HTTP acceptance means the request was
+saved, not that the order has filled.
 
-> First the page reads the lowest waiting seller. It then sends one real buyer
-> at that exact price. FastAPI returns HTTP 202 with a correlation ID and a
-> durable command ID. The background matching service completes that command and the
-> page checks that REST and WebSocket report the same new trade ID.
+## Follow a guided example
 
-Do not move to another page. The Before, Action, and Result story and its four
-steps remain together. There is no second scenario panel to operate.
+Open **Want a guided example?** below the market. The lesson pauses after every
+outcome. There is no automatic slideshow or artificial backend delay.
 
-### 40-60 seconds: read the receipt
+1. **Try a lower price.** Compare the cheapest seller with a one-unit buy one
+   tick below that price. Press **Place this lower offer**. The page reads the
+   saved order and explains whether it waited, filled, or was cancelled. Its
+   submitted price stays visible even when the live market changes.
+2. **Meet the seller's price.** Press **Next** when ready. The new preview uses
+   the current quote. With your confirmation, the lesson checks the first order,
+   cancels any unfilled unit, then submits one matching buyer. A changed quote
+   prompts another review rather than silently changing the buyer's limit.
+3. **Follow the request.** After the trade is confirmed, press **Next** to
+   inspect Browser, API, Database, Matching service, and This page. Each stop
+   explains one action using the actual order or trade evidence. Navigation does
+   not submit orders.
 
-When the run receipt appears, point to:
+A lower offer can fill if another visitor supplies a compatible seller while you
+are reading. The lesson reports the persisted outcome, not a scripted result.
+At the minimum price of one tick, the lower-price example is skipped. With no
+sellers, the matching button explicitly authorizes a one-unit setup seller;
+unused setup orders are included in lesson cleanup.
 
-- the exact order sent and HTTP 202 acceptance;
-- the correlation, command, and order identifiers;
-- the command's completed sequence;
-- the matched quantity and price;
-- the identical trade ID observed through REST and WebSocket;
-- the elapsed end-to-end time.
+The main market remains live while explanations are paused. Only completed
+trades add graph points; a trade at the same price can leave the line flat.
+The verified lesson trade is marked in visible trade history.
 
-Say:
+## Optional backend details
 
-> The receipt appears only after the command has completed and two independent
-> read paths expose the same committed trade. The highlighted row in Trade
-> history is the trade created by this click.
+**See how the backend works** contains the complete command and correlation IDs,
+REST/WebSocket trade identity check, request log, and live system diagnostics.
+Both this section and the guided lesson start closed.
 
-Point to the open **How this request moves** section immediately beneath the
-demo. Its five handoffs connect the visible result to the browser, FastAPI,
-PostgreSQL, background matching service, and REST/WebSocket update on the page.
+HTTP 202 means an offer was accepted, not that it traded. Successful verification
+requires a completed command and a new trade containing the submitted buyer ID
+in both saved records and the live stream.
 
-### 60-80 seconds: show operating evidence
+## If a request cannot be confirmed
 
-Expand **Engineering diagnostics** and point to **System diagnostics**:
+Use **Check this offer again** or **Check this trade again**. The lesson retains
+its original order request and idempotency key before sending it. If a response
+was lost, recovery reuses that exact request; once the receipt is known, checks
+only read its outcome. Cancellation commands are also retained for rechecking.
 
-> This is not a static architecture diagram. The processor heartbeat, queue
-> depth, command latency, sequence integrity, and stream-recovery counters come
-> from the running services and PostgreSQL.
+**End lesson and cancel waiting lesson offers** checks and cancels only orders
+created by this lesson. Filled units are never undone, and cancelled records may
+still show an unfilled quantity even though those units are no longer open.
+A replacement is never submitted while cancellation remains unconfirmed.
 
-Finish with the recovery story:
+Closing the disclosure does not cancel offers. End the lesson before leaving if
+you do not want an offer to remain in the shared demo market. Recovery state is
+held in this page session, not persisted across reloads.
 
-> PostgreSQL is the source of truth. A notification wakes the API quickly, but
-> if it is missed, the WebSocket heartbeat compares durable event cursors and
-> resynchronizes. A processor restart resumes the oldest accepted command.
+The live check allows 15 seconds for confirmation, including the server's
+default 10-second recovery heartbeat. A failed confirmation never becomes a
+successful result without the required evidence.
 
-## If there is another minute
+## Engineering details, when asked
 
-- Use **Place your own order** to demonstrate the same public command path
-  without the guided explanation.
-- Expand **Engineering diagnostics** to show operating evidence.
-- Open `/api/v1/diagnostics/summary` or `/metrics` for the machine-readable
-  surfaces.
-
-## Questions the demo should answer
-
-**How do I know the UI is not faking the result?**
-
-The guided demo reads the current best seller, submits one buyer through
-`POST /api/v1/orders`, waits for that exact command to reach `completed`, then
-requires a previously unseen trade containing its order ID. It shows success
-only after the same trade ID is independently observed in the REST response and
-the WebSocket event. The receipt exposes the server-generated identifiers so
-the claim can be checked rather than merely trusted.
-
-**Why not process the order inside the HTTP request?**
-
-The short API transaction can accept concurrent traffic without holding an
-HTTP connection across matching. The durable journal also gives the processor
-a restart point.
-
-**Why is there one processor?**
-
-One writer makes fills, cancellations, and price-time priority deterministic.
-PostgreSQL advisory locking prevents two workers from mutating the same global
-sequence.
-
-**What happens if a process crashes?**
-
-Before the result transaction commits, every state change rolls back and the
-command stays queued. After commit, the command is terminal and cannot be
-applied again. The API and processor can restart independently.
-
-**Is `LISTEN`/`NOTIFY` the event store?**
-
-No. It is only a low-latency wake-up hint. The command journal, market events,
-orders, and trades in PostgreSQL are durable.
-
-**Is this a production exchange?**
-
-No. It is a focused distributed-systems demonstration using fictional symbols
-and simulated orders. It intentionally omits money, accounts, and external
-market connectivity.
+- PostgreSQL assigns each accepted command an ordered sequence.
+- A single background matching service processes commands in sequence.
+- Orders, trades, events, and command completion commit in one transaction.
+- Notifications wake the API quickly; durable cursors recover missed updates.
+- Reconnection resumes from the last seen event instead of relying on the browser
+  to guess which trades occurred.
+- REST and WebSocket must agree on the trade ID. Their observation times and event
+  cursors need not be identical.
+- This is a fictional simulator, not a brokerage or a production exchange.

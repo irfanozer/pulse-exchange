@@ -120,20 +120,30 @@ WebSocket traffic to FastAPI.
 
 ## Prove it in the browser
 
-Open the terminal and choose **Send this buyer and verify the trade**. The page
-first reads a real waiting seller from the selected order book, then submits
-one compatible buy order through `POST /api/v1/orders`. It does not report
-success until that command is completed and the same new trade identifier has
-appeared through both the REST API and the WebSocket stream.
+The main screen shows a price-history graph next to a buy/sell offer form, with
+waiting orders and trade history underneath. Set your price and quantity to
+place an offer. Unmatched offers wait in the order book; only completed trades
+add graph points. The graph uses recent recorded trades, not simulated prices.
 
-The receipt exposes the HTTP status, correlation and command identifiers,
-processed sequence, matched order identifiers, and independent REST/WebSocket
-confirmation. The live order book and highlighted trade provide the visual
-result. The five-step request path is open directly beneath the demo so a
-visitor can immediately connect the button press to the API, database,
-matching service, and live page update. Manual order entry is a secondary sandbox;
-advanced operating diagnostics remain expandable. A
-concise 60-90 second walkthrough is in [docs/demo.md](docs/demo.md).
+For a walkthrough, open **Want a guided example?**. First submit a one-unit buy
+below the cheapest seller and inspect its actual saved status. When ready, move
+to the matching example: confirm the current quote, cancel the first offer's
+unfilled unit, and send one matching buyer.
+
+Every explanation waits for **Next**. The backend continues at normal speed.
+Once the same trade is confirmed through REST and WebSocket, the lesson offers
+a request-path walkthrough using that trade's real evidence. Quote changes,
+fills while reading, and unconfirmed requests are explained rather than hidden.
+Recovery reuses the original request key instead of creating extra orders.
+
+Two optional sections start closed:
+
+- **Want a guided example?** teaches why an offer waits, what makes it match,
+  and how the server returns the result. Manual trading remains visible.
+- **See how the backend works** contains the full server identifiers,
+  independent REST/WebSocket evidence, and live diagnostics.
+
+The walkthrough is in [docs/demo.md](docs/demo.md).
 
 ## Verify the project
 
