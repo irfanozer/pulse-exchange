@@ -40,6 +40,10 @@ and manual `.github/workflows/deploy-economy.yml` deployment workflow.
 
 ## Recovery and cost boundaries
 
+For the shared controller's narrowly guarded rehearsal recovery procedure, see
+the EventHarbor runbook linked above. Do not rerun ordinary rehearsal against an
+existing target or replace its saved backup.
+
 Before replacement applications accept writes, the preserved source revisions
 and schedules provide a controlled recovery path. After new writes, the new
 databases are authoritative: switching back to stale sources would lose data.
