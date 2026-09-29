@@ -15,8 +15,13 @@ copy controllers. Run those shared helpers from that repository with explicit
 foundation from this repository. PulseExchange retains its own runtime, images,
 and manual `.github/workflows/deploy-economy.yml` deployment workflow.
 
-These instructions describe the approved route, not proof of completed
-application deployment, public cutover, or old-resource retirement.
+## Verified deployment status on 2026-09-29
+
+- [PulseExchange](https://pulseexchange.irfanburakozer.com) and [EventHarbor](https://eventharbor.irfanburakozer.com) are live with fresh fictional data on `vm-px-demos-economy` and `vm-eh-demos-economy` in `rg-demos-economy`, West US 2. TLS and isolation were verified for their separate databases and 12-connection application roles on the shared private PostgreSQL server.
+- Public PulseExchange checks passed for a fictional ORBIT trade confirmed through REST and WebSocket, reconnect replay, and cancellation of the test order. EventHarbor rejection and retry checks also passed, including `429`, `429`, `200` with approximately 5.14-second retry gaps.
+- At inspection, all application containers were healthy with zero reported restarts and no current OOM flag. Maintenance timers were enabled. Available memory was approximately 280 MiB on the PulseExchange VM and 250 MiB on EventHarbor; these are observations, not capacity guarantees.
+- The [PulseExchange deployment run](https://github.com/irfanozer/pulse-exchange/actions/runs/36580134237) succeeded. Its controller revision was `ac84e6a`; the reused immutable application images still identify application revision `cc0ef0b`. Legacy deployment files remain unchanged, old deployment flags are disabled, and the new manual economy workflow is enabled.
+- **Old-resource retirement is complete.** Azure confirmed that `rg-pulseexchange-prod`, `rg-eventharbor-prod`, and both Azure-managed networking groups are absent, including their old databases, Container Apps, jobs, load balancers, and public IPs. Replacement infrastructure and the retained backup account were verified after deletion. Old history was intentionally discarded; retained rehearsal backups are earlier snapshots, not final copies. Already-accrued charges and delayed billing entries can still appear.
 
 ## Current route: fresh demo data
 
@@ -68,13 +73,20 @@ above. Do not rerun ordinary rehearsal against an existing target or replace
 its saved backup. The current fresh-data route does not require another
 rehearsal or a final source copy.
 
-Before replacement applications accept writes, the preserved source revisions
-and schedules provide a controlled recovery path. After new writes, the new
-databases are authoritative: switching back to stale sources would lose data.
-Freeze and reconcile before rollback. No helper automatically deletes sources,
-backup archives, or old Azure networking.
+Recovery from preserved source revisions and schedules was available only while
+the original resources and databases still existed. The original database servers
+have now been deleted under the approved discard-history route. The replacement
+databases are authoritative. Returning to the old profile requires recreating its
+infrastructure from preserved files and planning a new data transfer. Rehearsal
+backups are earlier snapshots, not a complete rollback of current data. Freeze
+and reconcile writes before a future cutover. The repository migration helpers
+do not automatically delete sources, backup archives, or old Azure networking;
+this migration uses a separately authorized retirement operation.
 
 Two B2ats_v2 VMs share one eligible monthly allowance, not one allowance per VM.
 VM quota approval and a new PostgreSQL server do not reset billing benefits.
-Public IPv4, DNS, transfer, overages, and migration overlap may be billed. These
-instructions do not claim completed cutover, free hosting, or achieved savings.
+Public IPv4, DNS, transfer, overages, and migration overlap may be billed.
+Retirement was verified separately as recorded above. Public cutover does not
+establish free hosting or a measured full month of savings.
+See the [dated combined cost estimate and official rate sources](https://github.com/irfanozer/eventharbor/blob/main/docs/economy-migration.md#cost-boundary)
+in the authoritative EventHarbor runbook for both projects' shared monthly budget.

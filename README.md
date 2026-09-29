@@ -262,11 +262,35 @@ There are intentionally no accounts, balances, authentication, or real market
 connections. Read [docs/security.md](docs/security.md) before exposing the demo
 to the internet.
 
+## Deployment profiles
+
+Two Azure deployment profiles are retained. The public demo moved to the VM
+profile to reduce hosting cost, not to remove the original Container Apps
+architecture or its deployment automation.
+
+### Current cost-optimized deployment
+
+PulseExchange runs on its own Azure Linux VM with Docker Compose, immutable
+container images, and Caddy HTTPS. Its PostgreSQL server is shared with
+EventHarbor through private networking, with separate databases and restricted
+application accounts. GitHub Actions deploys through VM-scoped OIDC access.
+
+- [Current deployment status and migration](docs/economy-migration.md)
+- [Economy VM setup and deployment](docs/azure-economy.md)
+
+### Original Container Apps deployment
+
 Production packaging is included for Azure Container Apps: private PostgreSQL,
 an internal API, a continuously running matching service, migration and seed
 jobs, scheduled public-demo maintenance, immutable GHCR images, OIDC release
 automation, rollback, and custom-certificate preservation. Follow
 [docs/deployment.md](docs/deployment.md) before creating billable resources.
+
+This original architecture remains reproducible from `infra/azure`,
+`scripts/azure`, and `.github/workflows/deploy-production.yml`. Its old running
+resources were removed after the verified cutover; the files remain intact.
+The original workflow stays disabled until deliberately reconfigured and enabled
+for a future deployment. Review the current migration runbook for cost assumptions.
 
 ## License
 
