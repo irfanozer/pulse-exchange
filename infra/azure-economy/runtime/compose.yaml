@@ -1,0 +1,190 @@
+name: pulseexchange-economy
+
+x-hardened: &hardened
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 80
+  logging:
+    driver: local
+    options:
+      max-size: "5m"
+      max-file: "2"
+  stop_grace_period: 30s
+  tmpfs:
+    - /tmp:size=16m,mode=1777
+
+x-backend: &backend
+  <<: *hardened
+  image: ${BACKEND_IMAGE:?backend digest required}
+  platform: linux/amd64
+  networks: [application]
+  mem_limit: 128m
+  cpus: 0.75
+
+x-app-env: &app-env
+  PULSEEXCHANGE_ENVIRONMENT: production
+  PULSEEXCHANGE_DATABASE_URL: ${PULSEEXCHANGE_DATABASE_URL:?private Azure PostgreSQL TLS URL required}
+  PULSEEXCHANGE_DATABASE_POOL_SIZE: "2"
+  PULSEEXCHANGE_DATABASE_MAX_OVERFLOW: "0"
+  PULSEEXCHANGE_PROCESSOR_HEARTBEAT_STALE_SECONDS: "15"
+  PULSEEXCHANGE_ALLOWED_HOSTS: api,127.0.0.1,localhost
+  PULSEEXCHANGE_CORS_ORIGINS: https://${PUBLIC_HOSTNAME:?hostname required}
+  PULSEEXCHANGE_WEBSOCKET_ORIGINS: https://${PUBLIC_HOSTNAME:?hostname required}
+
+services:
+  processor:
+    <<: *backend
+    restart: unless-stopped
+    mem_limit: 192m
+    environment:
+      <<: *app-env
+      PULSEEXCHANGE_PROCESSOR_ENABLED: "true"
+      PULSEEXCHANGE_PROCESSOR_POLL_INTERVAL_MS: "250"
+      PULSEEXCHANGE_PROCESSOR_HEARTBEAT_INTERVAL_SECONDS: "2"
+      PULSEEXCHANGE_WORKER_HEALTH_PORT: "8002"
+    command: ["python", "-m", "pulseexchange.worker"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/ready', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+
+  api:
+    <<: *backend
+    restart: unless-stopped
+    mem_limit: 192m
+    environment:
+      <<: *app-env
+      PULSEEXCHANGE_PROCESSOR_ENABLED: "false"
+      PULSEEXCHANGE_EVENT_RELAY_ENABLED: "true"
+      PULSEEXCHANGE_REQUIRE_PROCESSOR_FOR_READINESS: "true"
+      PULSEEXCHANGE_WEBSOCKET_HEARTBEAT_SECONDS: "20"
+      PULSEEXCHANGE_WEBSOCKET_REPLAY_LIMIT: "100"
+      PULSEEXCHANGE_MAX_WEBSOCKET_CONNECTIONS: "100"
+      PULSEEXCHANGE_MUTATION_RATE_LIMIT: "120"
+      PULSEEXCHANGE_MUTATION_RATE_WINDOW_SECONDS: "60"
+      # Nginx overwrites both identity headers using Caddy's authenticated peer.
+      PULSEEXCHANGE_TRUST_PROXY_HEADERS: "true"
+      PULSEEXCHANGE_MAX_REQUEST_BODY_BYTES: "16384"
+      PULSEEXCHANGE_MAX_QUEUED_COMMANDS: "500"
+      PULSEEXCHANGE_MAX_TOTAL_COMMANDS: "10000"
+    command: ["uvicorn", "pulseexchange.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers"]
+    depends_on:
+      processor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+
+  migrate:
+    <<: *backend
+    profiles: [tasks]
+    restart: "no"
+    environment: *app-env
+    command: ["alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
+
+  seed:
+    <<: *backend
+    profiles: [tasks]
+    restart: "no"
+    environment:
+      PULSEEXCHANGE_SEED_MARKET: "true"
+      PULSEEXCHANGE_SEED_BASE_URL: http://api:8000
+      PULSEEXCHANGE_SEED_STARTUP_TIMEOUT_SECONDS: "180"
+      PULSEEXCHANGE_SEED_COMMAND_TIMEOUT_SECONDS: "30"
+    command: ["python", "-m", "pulseexchange.seed"]
+
+  maintenance:
+    <<: *backend
+    profiles: [tasks]
+    restart: "no"
+    environment:
+      <<: *app-env
+      PULSEEXCHANGE_DATABASE_POOL_SIZE: "1"
+      PULSEEXCHANGE_MAINTENANCE_RESEED: "true"
+      PULSEEXCHANGE_SEED_MARKET: "true"
+      PULSEEXCHANGE_SEED_BASE_URL: http://api:8000
+      PULSEEXCHANGE_SEED_STARTUP_TIMEOUT_SECONDS: "180"
+      PULSEEXCHANGE_SEED_COMMAND_TIMEOUT_SECONDS: "30"
+    command: ["python", "-m", "pulseexchange.maintenance"]
+
+  frontend:
+    <<: *hardened
+    image: ${FRONTEND_IMAGE:?frontend digest required}
+    platform: linux/amd64
+    restart: unless-stopped
+    user: "101:101"
+    mem_limit: 64m
+    cpus: 0.50
+    environment:
+      API_UPSTREAM: http://api:8000
+      NGINX_ENVSUBST_FILTER: API_UPSTREAM
+    tmpfs:
+      - /tmp:size=16m,uid=101,gid=101,mode=1770
+      - /etc/nginx/conf.d:size=1m,uid=101,gid=101,mode=0755
+    volumes:
+      - ./nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    networks:
+      edge:
+        ipv4_address: 172.29.240.3
+      application: {}
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  caddy:
+    <<: *hardened
+    image: ${CADDY_IMAGE:?official Caddy digest required}
+    platform: linux/amd64
+    restart: unless-stopped
+    # The upstream image uses root; only its listener capability is retained.
+    cap_add: [NET_BIND_SERVICE]
+    mem_limit: 64m
+    cpus: 0.50
+    environment:
+      PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:?hostname required}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME contact required}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      edge:
+        ipv4_address: 172.29.240.2
+    depends_on:
+      frontend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+# Only the HTTPS edge publishes host ports. Application containers can reach
+# private Azure PostgreSQL; neither network creates an internet ingress route.
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: 172.29.240.0/28
+  application: {}
+
+volumes:
+  caddy-data:
+  caddy-config:
