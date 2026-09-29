@@ -92,32 +92,40 @@ async def build_diagnostics_summary(
     ]
 
     order_count, trade_count, event_count, latest_sequence = (
-        await session.execute(
-            select(
-                select(func.count(OrderRecord.order_id)).scalar_subquery(),
-                select(func.count(TradeRecord.trade_id)).scalar_subquery(),
-                select(func.count(MarketEvent.event_id)).scalar_subquery(),
-                select(func.coalesce(func.max(MarketCommand.sequence), 0)).scalar_subquery(),
+        (
+            await session.execute(
+                select(
+                    select(func.count(OrderRecord.order_id)).scalar_subquery(),
+                    select(func.count(TradeRecord.trade_id)).scalar_subquery(),
+                    select(func.count(MarketEvent.event_id)).scalar_subquery(),
+                    select(func.coalesce(func.max(MarketCommand.sequence), 0)).scalar_subquery(),
+                )
             )
         )
-    ).one()
+        .tuples()
+        .one()
+    )
     terminal_command_count = int(status_rows.get(CommandStatus.COMPLETED, 0)) + int(
         status_rows.get(CommandStatus.REJECTED, 0)
     )
     terminal_event_commands, queued_event_count = (
-        await session.execute(
-            select(
-                func.count(func.distinct(MarketEvent.command_sequence)).filter(
-                    MarketCommand.status.in_((CommandStatus.COMPLETED, CommandStatus.REJECTED))
-                ),
-                func.count(MarketEvent.event_id).filter(
-                    MarketCommand.status == CommandStatus.QUEUED
-                ),
+        (
+            await session.execute(
+                select(
+                    func.count(func.distinct(MarketEvent.command_sequence)).filter(
+                        MarketCommand.status.in_((CommandStatus.COMPLETED, CommandStatus.REJECTED))
+                    ),
+                    func.count(MarketEvent.event_id).filter(
+                        MarketCommand.status == CommandStatus.QUEUED
+                    ),
+                )
+                .select_from(MarketEvent)
+                .join(MarketCommand, MarketCommand.sequence == MarketEvent.command_sequence)
             )
-            .select_from(MarketEvent)
-            .join(MarketCommand, MarketCommand.sequence == MarketEvent.command_sequence)
         )
-    ).one()
+        .tuples()
+        .one()
+    )
     sequence_integrity = (
         int(event_count or 0) == terminal_command_count
         and int(terminal_event_commands or 0) == terminal_command_count
