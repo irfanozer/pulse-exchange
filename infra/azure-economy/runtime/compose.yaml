@@ -24,6 +24,7 @@ x-backend: &backend
   cpus: 0.75
 
 x-app-env: &app-env
+  PGSSLROOTCERT: /etc/ssl/certs/ca-certificates.crt
   PULSEEXCHANGE_ENVIRONMENT: production
   PULSEEXCHANGE_DATABASE_URL: ${PULSEEXCHANGE_DATABASE_URL:?private Azure PostgreSQL TLS URL required}
   PULSEEXCHANGE_DATABASE_POOL_SIZE: "2"
