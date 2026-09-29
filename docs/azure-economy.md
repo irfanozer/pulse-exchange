@@ -1,4 +1,9 @@
-# Optional lower-cost Azure deployment
+# Lower-cost Azure deployment
+
+The selected route is now the [combined economy migration](economy-migration.md)
+after West US 2 quota approval. Both source databases move directly to the new
+shared server; the earlier database-only move into EventHarbor's old server is
+historical. Foundation provisioning alone does not establish successful cutover.
 
 The existing Container Apps deployment remains available under `infra/azure`, `scripts/azure`, and its existing production workflow. No legacy deployment files are replaced by this option.
 

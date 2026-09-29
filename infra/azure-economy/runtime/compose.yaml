@@ -41,7 +41,7 @@ services:
     environment:
       <<: *app-env
       PULSEEXCHANGE_PROCESSOR_ENABLED: "true"
-      PULSEEXCHANGE_PROCESSOR_POLL_INTERVAL_MS: "250"
+      PULSEEXCHANGE_PROCESSOR_POLL_INTERVAL_MS: "500"
       PULSEEXCHANGE_PROCESSOR_HEARTBEAT_INTERVAL_SECONDS: "2"
       PULSEEXCHANGE_WORKER_HEALTH_PORT: "8002"
     command: ["python", "-m", "pulseexchange.worker"]
